@@ -1,0 +1,393 @@
+.container {
+  min-height: 100vh;
+  background: #0f1117;
+  color: #e2e8f0;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  padding: 16px;
+  box-sizing: border-box;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  background: #181c27;
+  border: 1px solid #283044;
+  border-radius: 12px;
+  margin-bottom: 16px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.brandIcon {
+  font-size: 24px;
+}
+
+.title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 800;
+  color: #f8fafc;
+  letter-spacing: -0.3px;
+}
+
+.subtitle {
+  margin: 2px 0 0;
+  font-size: 11px;
+  color: #94a3b8;
+  font-weight: 600;
+}
+
+.badges {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.statusPill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 20px;
+  font-size: 11.5px;
+  font-weight: 700;
+  background: #1e2433;
+  border: 1px solid #2d374d;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.dotGreen {
+  background: #10b981;
+  box-shadow: 0 0 8px #10b98188;
+}
+
+.dotRed {
+  background: #ef4444;
+}
+
+.dotYellow {
+  background: #f59e0b;
+}
+
+/* Two-column layout */
+.mainGrid {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: 16px;
+}
+
+@media (max-width: 980px) {
+  .mainGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.card {
+  background: #181c27;
+  border: 1px solid #283044;
+  border-radius: 14px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.cardTitle {
+  margin: 0 0 12px;
+  font-size: 14px;
+  font-weight: 800;
+  color: #cbd5e1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  letter-spacing: 0.5px;
+}
+
+/* YouTube Input & Controls */
+.urlRow {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.input {
+  flex: 1;
+  background: #0f131c;
+  border: 1px solid #2d374d;
+  border-radius: 8px;
+  padding: 10px 14px;
+  color: #f1f5f9;
+  font-size: 13px;
+  outline: none;
+}
+
+.input:focus {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 2px #3b82f633;
+}
+
+.btn {
+  background: #2563eb;
+  color: white;
+  border: 0;
+  border-radius: 8px;
+  padding: 10px 18px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: background 0.15s ease, transform 0.1s ease;
+}
+
+.btn:hover {
+  background: #1d4ed8;
+}
+
+.btn:active {
+  transform: scale(0.98);
+}
+
+.btnSecondary {
+  background: #232b3d;
+  color: #cbd5e1;
+  border: 1px solid #333f57;
+}
+
+.btnSecondary:hover {
+  background: #2c364c;
+}
+
+.btnDanger {
+  background: #dc2626;
+  color: white;
+}
+
+.btnDanger:hover {
+  background: #b91c1c;
+}
+
+.btnSuccess {
+  background: #059669;
+  color: white;
+}
+
+.btnSuccess:hover {
+  background: #047857;
+}
+
+.btnSm {
+  padding: 5px 10px;
+  font-size: 11px;
+}
+
+/* Playback Control Bar */
+.controlBar {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 12px;
+  background: #121620;
+  border-radius: 10px;
+  border: 1px solid #232a3a;
+}
+
+.buttonsRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.btnGroup {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.seekBar {
+  width: 100%;
+  accent-color: #3b82f6;
+  cursor: pointer;
+  height: 6px;
+}
+
+.timeDisplay {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: #94a3b8;
+  font-family: monospace;
+}
+
+.volumeRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: #cbd5e1;
+}
+
+.slider {
+  accent-color: #3b82f6;
+  cursor: pointer;
+}
+
+/* Audio Sync Section */
+.syncBox {
+  background: #121824;
+  border: 1px solid #29354a;
+  border-radius: 10px;
+  padding: 14px;
+  margin-top: 12px;
+}
+
+.syncValue {
+  font-family: monospace;
+  font-size: 16px;
+  font-weight: 800;
+  color: #38bdf8;
+}
+
+.syncHelp {
+  font-size: 11px;
+  color: #94a3b8;
+  line-height: 1.5;
+  margin-top: 8px;
+}
+
+/* Member list */
+.memberList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.memberItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: #121620;
+  border: 1px solid #232b3d;
+  border-radius: 8px;
+  font-size: 12.5px;
+}
+
+.memberName {
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.roleBadge {
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 12px;
+  font-weight: 800;
+  letter-spacing: 0.3px;
+}
+
+.roleAdmin {
+  background: #f59e0b24;
+  color: #fbbf24;
+  border: 1px solid #f59e0b55;
+}
+
+.roleSinger {
+  background: #ec489924;
+  color: #f472b6;
+  border: 1px solid #ec489955;
+}
+
+.roleInvited {
+  background: #8b5cf624;
+  color: #a78bfa;
+  border: 1px solid #8b5cf655;
+}
+
+.roleListener {
+  background: #64748b24;
+  color: #94a3b8;
+  border: 1px solid #64748b55;
+}
+
+/* Diagnostics */
+.diagGrid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  font-size: 11px;
+}
+
+.diagItem {
+  background: #11151f;
+  border: 1px solid #202738;
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+.diagLabel {
+  color: #64748b;
+  display: block;
+  font-size: 10px;
+  text-transform: uppercase;
+  margin-bottom: 2px;
+}
+
+.diagVal {
+  font-family: monospace;
+  font-weight: 700;
+  color: #f1f5f9;
+}
+
+/* Audio Level Bar */
+.audioMeter {
+  width: 100%;
+  height: 8px;
+  background: #0f131c;
+  border-radius: 4px;
+  overflow: hidden;
+  margin-top: 8px;
+  border: 1px solid #263147;
+}
+
+.audioMeterFill {
+  height: 100%;
+  background: linear-gradient(90deg, #10b981, #eab308, #ef4444);
+  transition: width 0.08s ease;
+}
+
+/* Queue List */
+.queueList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.queueItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  background: #11151f;
+  border-radius: 6px;
+  font-size: 12px;
+}

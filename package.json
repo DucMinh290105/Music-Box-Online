@@ -1,0 +1,38 @@
+{
+  "name": "music-box-online-3d-reconstructed",
+  "version": "2.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --hostname 0.0.0.0",
+    "dev:realtime": "node server/realtime-server.mjs",
+    "build": "next build",
+    "start": "node server/unified-server.mjs",
+    "start:next": "next start --hostname 0.0.0.0",
+    "start:realtime": "node server/realtime-server.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node --disable-warning=ExperimentalWarning --experimental-strip-types --test tests/*.test.mjs",
+    "validate:assets": "node tests/validate-assets.mjs",
+    "check": "npm run validate:assets && npm run validate:room && npm run test && npm run syntaxcheck && npm run typecheck",
+    "validate:room": "node tests/validate-room.mjs",
+    "syntaxcheck": "node tests/check-ts-syntax.mjs"
+  },
+  "dependencies": {
+    "@react-three/fiber": "9.8.1",
+    "livekit-client": "^2.23.0",
+    "livekit-server-sdk": "^2.19.2",
+    "next": "16.4.5",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "socket.io": "^4.8.4",
+    "socket.io-client": "^4.8.4",
+    "three": "0.180.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@types/three": "^0.180.0",
+    "typescript": "^5.8.3"
+  },
+  "type": "module"
+}

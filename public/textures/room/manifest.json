@@ -1,0 +1,56 @@
+{
+  "front": {
+    "file": "/textures/room/front-clean.webp",
+    "source": "front.webp: removed painted TV, speakers, console and piano",
+    "imageSize": [
+      1448,
+      516
+    ],
+    "wallHeight": 5.7
+  },
+  "left": {
+    "file": "/textures/room/left.webp",
+    "source": "phòng_nhạc_pastel_bên_cửa_sổ_sakura.png",
+    "imageSize": [
+      1448,
+      523
+    ],
+    "wallHeight": 5.7
+  },
+  "right": {
+    "file": "/textures/room/right.webp",
+    "source": "phòng_tường_pastel_kỳ_diệu_với_cửa_nhạc_cụ.png",
+    "imageSize": [
+      1448,
+      594
+    ],
+    "wallHeight": 5.7
+  },
+  "back": {
+    "file": "/textures/room/back.webp",
+    "source": "pastel_kawaii_music_room_wall.png",
+    "imageSize": [
+      1448,
+      524
+    ],
+    "wallHeight": 5.7
+  },
+  "floor": {
+    "file": "/textures/room/floor.webp",
+    "source": "sàn_gỗ_pastel_hồng_đào_bóng_mịn.png",
+    "imageSize": [
+      1254,
+      1254
+    ],
+    "wallHeight": null
+  },
+  "ceiling": {
+    "file": "/textures/room/ceiling.webp",
+    "source": "trần_nhạc_hộp_pastel_phát_sáng.png",
+    "imageSize": [
+      1254,
+      1254
+    ],
+    "wallHeight": null
+  }
+}

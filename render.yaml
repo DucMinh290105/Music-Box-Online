@@ -1,0 +1,12 @@
+services:
+  # Cách 1 (Khuyên dùng - Chỉ 1 dịch vụ duy nhất): Deploy toàn bộ Web 3D + Socket.IO + Hát Online trên cùng 1 cổng
+  - type: web
+    name: music-box-online-all-in-one
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
