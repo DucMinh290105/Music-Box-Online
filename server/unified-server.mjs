@@ -13,7 +13,7 @@ await app.prepare();
 
 const server = http.createServer((req, res) => {
   if (req.url === '/health') {
-    const defaultRoom = getOrCreateRoom('music-box-20');
+    const defaultRoom = getOrCreateRoom('1234');
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(
       JSON.stringify({

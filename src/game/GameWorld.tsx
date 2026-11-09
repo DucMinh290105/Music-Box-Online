@@ -44,6 +44,10 @@ export interface GameWorldProps {
  avatarId:string;roomSizeMode:RoomSizeMode;controls:React.RefObject<Controls>;eventSink?:GameEventSink;
  tvOverlayRefs?:TvOverlayRefs;
  tvMedia?:TvMediaInfo;
+ playerName?:string;
+ playerRole?:string;
+ playerMuted?:boolean;
+ playerAudioLevel?:number;
  remoteMembers?:RoomMember[];
  onLocalPose?:(pose:LocalPlayerPose)=>void;
  onStatus:(state:WorldStatus)=>void;onAction:(act:WorldAction)=>void;
@@ -53,8 +57,57 @@ const clamp=THREE.MathUtils.clamp;
 const getPose=(g:THREE.Group):SeatPose=>({x:g.position.x,y:g.position.y,z:g.position.z,yaw:g.rotation.y});
 const eps=(n:number)=>(Math.abs(n)<1e-10?0:n);
 
+function drawNametagCanvas(
+ canvas:HTMLCanvasElement,
+ rawName:string,
+ role?:string,
+ isMuted:boolean=true,
+ audioLevel:number=0
+){
+ const ctx=canvas.getContext('2d');
+ if(!ctx)return;
+ const W=canvas.width,H=canvas.height;
+ ctx.clearRect(0,0,W,H);
+
+ const isSinging=!isMuted&&audioLevel>6;
+ const cleanName=(rawName||'Khách').trim().slice(0,18);
+ const rolePrefix=role==='admin'?'👑 ':role==='host'?'🏠 ':'';
+ const micSuffix=!isMuted?' 🔊':'';
+ const label=`${rolePrefix}${cleanName}${micSuffix}`;
+
+ ctx.font='900 38px "Segoe UI", Arial, sans-serif';
+ const textWidth=ctx.measureText(label).width;
+ const boxW=Math.min(W-16,Math.max(220,Math.ceil(textWidth+68)));
+ const boxH=76;
+ const boxX=(W-boxW)/2;
+ const boxY=(H-boxH)/2;
+
+ // Semi-transparent black background ("nền đen transparency")
+ ctx.fillStyle='rgba(8, 8, 12, 0.72)';
+ ctx.beginPath();
+ ctx.roundRect(boxX,boxY,boxW,boxH,38);
+ ctx.fill();
+
+ // Subtle golden/singing border
+ ctx.strokeStyle=isSinging?'#4ade80':'rgba(255, 204, 0, 0.78)';
+ ctx.lineWidth=3.5;
+ ctx.stroke();
+
+ // Dark outline + Bold Golden Yellow text ("chữ vàng đậm dễ nhìn")
+ ctx.textAlign='center';
+ ctx.textBaseline='middle';
+ ctx.lineJoin='round';
+ ctx.strokeStyle='rgba(0, 0, 0, 0.92)';
+ ctx.lineWidth=6;
+ ctx.strokeText(label,W/2,H/2+1);
+
+ ctx.fillStyle='#FFCC00';
+ ctx.fillText(label,W/2,H/2+1);
+}
+
 function RemoteAvatarActor({member}:{member:RoomMember}){
  const groupRef=useRef<THREE.Group>(null!);
+ const nametagMeshRef=useRef<THREE.Mesh>(null!);
  const avatarRef=useRef<AvatarRuntime|null>(null);
  const currentActionRef=useRef<string>('idle');
  const avatarId=member.avatarId||'chibi-01';
@@ -91,7 +144,7 @@ function RemoteAvatarActor({member}:{member:RoomMember}){
  const badgeTexture=useMemo(()=>{
   if(typeof document==='undefined')return null;
   const c=document.createElement('canvas');
-  c.width=320;c.height=72;
+  c.width=512;c.height=112;
   const tex=new THREE.CanvasTexture(c);
   tex.colorSpace=THREE.SRGBColorSpace;
   return {canvas:c,tex};
@@ -99,26 +152,10 @@ function RemoteAvatarActor({member}:{member:RoomMember}){
 
  useEffect(()=>{
   if(!badgeTexture)return;
-  const ctx=badgeTexture.canvas.getContext('2d');
-  if(!ctx)return;
-  ctx.clearRect(0,0,320,72);
-  const isSinging=!member.isMuted&&(member.audioLevel||0)>6;
-  ctx.fillStyle=isSinging?'rgba(232, 67, 147, 0.92)':'rgba(43, 33, 68, 0.82)';
-  ctx.beginPath();
-  ctx.roundRect(16,10,288,52,26);
-  ctx.fill();
-  ctx.strokeStyle=isSinging?'#ffeaa7':'rgba(255,255,255,0.45)';
-  ctx.lineWidth=3;
-  ctx.stroke();
-  const roleIcon=member.role==='admin'?'👑':member.role==='singer'?'🎤':member.role==='invited_singer'?'🎶':'🎧';
-  const micBadge=!member.isMuted?' 🔊':'';
-  ctx.fillStyle='#ffffff';
-  ctx.font='bold 24px sans-serif';
-  ctx.textAlign='center';
-  ctx.textBaseline='middle';
-  ctx.fillText(`${roleIcon} ${member.name.slice(0,14)}${micBadge}`,160,36);
+  const effectiveRole=member.isSuperAdmin?'admin':member.isHost?'host':member.role;
+  drawNametagCanvas(badgeTexture.canvas,member.name,effectiveRole,member.isMuted,member.audioLevel||0);
   badgeTexture.tex.needsUpdate=true;
- },[badgeTexture,member.name,member.role,member.isMuted,member.audioLevel]);
+ },[badgeTexture,member.name,member.role,member.isSuperAdmin,member.isHost,member.isMuted,member.audioLevel]);
 
  useEffect(()=>()=>{badgeTexture?.tex.dispose();},[badgeTexture]);
 
@@ -130,6 +167,10 @@ function RemoteAvatarActor({member}:{member:RoomMember}){
   g.position.lerp(targetPos.current,ease);
   const diff=Math.atan2(Math.sin(targetYaw.current-g.rotation.y),Math.cos(targetYaw.current-g.rotation.y));
   g.rotation.y+=diff*ease;
+  // Lock nametag world rotation to 0 (facing from the front/spawn of the room toward the TV)
+  if(nametagMeshRef.current){
+   nametagMeshRef.current.rotation.y=-g.rotation.y;
+  }
 
   const nextAct=member.action||'idle';
   if(avatarRef.current&&currentActionRef.current!==nextAct){
@@ -142,9 +183,10 @@ function RemoteAvatarActor({member}:{member:RoomMember}){
  return (
   <group ref={groupRef} position={[member.x??0,member.y??0,member.z??1.6]} rotation={[0,member.yaw??Math.PI,0]}>
    {badgeTexture&&(
-    <sprite position={[0,1.92,0]} scale={[1.45,0.33,1]}>
-     <spriteMaterial map={badgeTexture.tex} transparent={true} depthWrite={false}/>
-    </sprite>
+    <mesh ref={nametagMeshRef} position={[0,1.88,0]} rotation={[0,-(member.yaw??Math.PI),0]} renderOrder={12}>
+     <planeGeometry args={[1.55,0.34]}/>
+     <meshBasicMaterial map={badgeTexture.tex} transparent={true} depthWrite={false} toneMapped={false} side={THREE.DoubleSide}/>
+    </mesh>
    )}
   </group>
  );
@@ -168,11 +210,12 @@ function playTvChime(){
   });
  }catch{}
 }
-export default function GameWorld({avatarId,roomSizeMode,controls,onStatus,onAction,eventSink,tvOverlayRefs,tvMedia,remoteMembers,onLocalPose}:GameWorldProps){
+export default function GameWorld({avatarId,roomSizeMode,controls,onStatus,onAction,eventSink,tvOverlayRefs,tvMedia,playerName,playerRole,playerMuted,playerAudioLevel,remoteMembers,onLocalPose}:GameWorldProps){
  const {camera,gl,scene}=useThree();
  const [w,,d]=ROOM.roomSize;
  const visualScale=ROOM_SIZES[roomSizeMode].scale;
  const root=useRef<THREE.Group>(null!);
+ const localNametagRef=useRef<THREE.Mesh>(null!);
  const placeholder=useRef<THREE.Group>(null!);
  const tvScreenMeshRef=useRef<THREE.Mesh>(null!);
  const avatar=useRef<AvatarRuntime|null>(null);
@@ -187,6 +230,20 @@ export default function GameWorld({avatarId,roomSizeMode,controls,onStatus,onAct
  const target=new THREE.Vector3(),desired=new THREE.Vector3(),tvCamPos=new THREE.Vector3();
  const tvImageRef=useRef<HTMLImageElement|null>(null);
  const tvState=useRef({playing:true,time:0,lastDraw:0});
+ const localBadgeTexture=useMemo(()=>{
+  if(typeof document==='undefined')return null;
+  const c=document.createElement('canvas');
+  c.width=512;c.height=112;
+  const tex=new THREE.CanvasTexture(c);
+  tex.colorSpace=THREE.SRGBColorSpace;
+  return {canvas:c,tex};
+ },[]);
+ useEffect(()=>{
+  if(!localBadgeTexture)return;
+  drawNametagCanvas(localBadgeTexture.canvas,playerName||'Khách',playerRole,playerMuted??true,playerAudioLevel??0);
+  localBadgeTexture.tex.needsUpdate=true;
+ },[localBadgeTexture,playerName,playerRole,playerMuted,playerAudioLevel]);
+ useEffect(()=>()=>{localBadgeTexture?.tex.dispose();},[localBadgeTexture]);
  const tvCanvas=useMemo(()=>{
   if(typeof document==='undefined')return null;
   const c=document.createElement('canvas');c.width=960;c.height=540;
@@ -319,6 +376,9 @@ export default function GameWorld({avatarId,roomSizeMode,controls,onStatus,onAct
    }else if(avatar.current&&['walk','run'].includes(avatar.current.state))avatar.current.setAction('idle');
   }else if(avatar.current&&['walk','run'].includes(avatar.current.state))avatar.current.setAction('idle');
   avatar.current?.update(dt);
+  if(localNametagRef.current){
+   localNametagRef.current.rotation.y=-g.rotation.y;
+  }
   ctl.cameraYaw-=ctl.orbitDelta.dx*.0046;
   ctl.cameraElevation=clamp(ctl.cameraElevation+ctl.orbitDelta.dy*.0035,-.8,1.18);
   ctl.cameraDistance=clamp(ctl.cameraDistance*ctl.zoomFactor,2.6,19);
@@ -477,6 +537,12 @@ export default function GameWorld({avatarId,roomSizeMode,controls,onStatus,onAct
   {/* Remote Players in the same room */}
   {remoteMembers?.map(m=><RemoteAvatarActor key={m.id} member={m}/>)}
   <group ref={root} position={ROOM.spawn as [number,number,number]} rotation={[0,Math.PI,0]}>
+   {localBadgeTexture&&(
+    <mesh ref={localNametagRef} position={[0,1.88,0]} rotation={[0,-Math.PI,0]} renderOrder={12}>
+     <planeGeometry args={[1.55,0.34]}/>
+     <meshBasicMaterial map={localBadgeTexture.tex} transparent={true} depthWrite={false} toneMapped={false} side={THREE.DoubleSide}/>
+    </mesh>
+   )}
    <group ref={placeholder}>
     <mesh position={[0,1.23,0]}><sphereGeometry args={[.46,16,12]}/><meshStandardMaterial color="#f8dac5"/></mesh>
     <mesh position={[0,.65,0]}><capsuleGeometry args={[.25,.34,4,12]}/><meshStandardMaterial color="#f4c3d8"/></mesh>

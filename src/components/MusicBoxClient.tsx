@@ -49,6 +49,11 @@ function formatTime(sec:number){
  return `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
 }
 
+function formatRoomDigits(raw:string):string{
+ const digits=raw.replace(/\D/g,'').slice(0,4);
+ return digits.padStart(4,'0');
+}
+
 export default function MusicBoxClient(){
  const [avatarId,setAvatarId]=useState('chibi-01');
  const [status,setStatus]=useState<WorldStatus>(initial);
@@ -64,9 +69,17 @@ export default function MusicBoxClient(){
  const pointer=useRef<number|null>(null);
  const [knob,setKnob]=useState({x:0,y:0});
 
- // Room & User Identity State (for Shareable Links ?room=...)
- const [roomId,setRoomId]=useState('music-box-20');
- const [roomInput,setRoomInput]=useState('music-box-20');
+ // Entry Gate / Lobby Modal & Role State (Guest vs Admin Key + 4-Digit Room ID)
+ const [hasEnteredRoom,setHasEnteredRoom]=useState(false);
+ const [loginMode,setLoginMode]=useState<'guest'|'admin'>('guest');
+ const [adminKeyInput,setAdminKeyInput]=useState('');
+ const [activeAdminKey,setActiveAdminKey]=useState('');
+ const [lobbyError,setLobbyError]=useState<string|null>(null);
+ const [connectTrigger,setConnectTrigger]=useState(0);
+
+ // 4-Digit Room ID & User Identity State
+ const [roomId,setRoomId]=useState('1234');
+ const [roomInput,setRoomInput]=useState('1234');
  const [userName,setUserName]=useState('Khách');
  const [mySocketId,setMySocketId]=useState('');
  const [copyCopied,setCopyCopied]=useState(false);
@@ -117,21 +130,43 @@ export default function MusicBoxClient(){
 
  const queueList=roomState?.queue??localQueue;
 
- // Initialize Room ID from URL (?room=...) and saved user name
+ // Initialize saved user name, avatar, and last 4-digit Room ID
  useEffect(()=>{
   if(typeof window==='undefined')return;
-  const params=new URLSearchParams(window.location.search);
-  const urlRoom=params.get('room')?.trim();
-  if(urlRoom){
-   setRoomId(urlRoom);
-   setRoomInput(urlRoom);
+  const savedRoom=localStorage.getItem('mb_room_id');
+  if(savedRoom&&/^\d{4}$/.test(savedRoom)){
+   setRoomId(savedRoom);
+   setRoomInput(savedRoom);
   }
   const savedName=localStorage.getItem('mb_user_name');
-  const initialName=savedName||`Ca sĩ ${Math.floor(100+Math.random()*900)}`;
+  const initialName=savedName||`Khách ${Math.floor(100+Math.random()*900)}`;
   if(!savedName)localStorage.setItem('mb_user_name',initialName);
   setUserName(initialName);
   const savedAvatar=localStorage.getItem('mb_avatar_id');
   if(savedAvatar)setAvatarId(savedAvatar);
+ },[]);
+
+ // Stop microphone and cleanup audio nodes
+ const stopMicrophone=useCallback(()=>{
+  if(levelTimerRef.current){
+   window.clearInterval(levelTimerRef.current);
+   levelTimerRef.current=null;
+  }
+  if(localStreamRef.current){
+   for(const t of localStreamRef.current.getTracks())t.stop();
+   localStreamRef.current=null;
+  }
+  if(audioCtxRef.current){
+   void audioCtxRef.current.close().catch(()=>{});
+   audioCtxRef.current=null;
+   monitorGainRef.current=null;
+   delayGainRef.current=null;
+  }
+  setMicEnabled(false);
+  setMicLevel(0);
+  if(socketRef.current?.connected){
+   socketRef.current.emit('audio:state',{isMuted:true,audioLevel:0});
+  }
  },[]);
 
  // Helper: Close a single WebRTC peer connection
@@ -226,15 +261,21 @@ export default function MusicBoxClient(){
   }
  },[echoMonitor,micEnabled]);
 
- // Connect to Realtime Server whenever roomId changes
+ // Connect to Realtime Server when user enters from Lobby (or changes roomId / role)
  useEffect(()=>{
-  if(typeof window==='undefined')return;
+  if(typeof window==='undefined'||connectTrigger===0)return;
   const savedName=localStorage.getItem('mb_user_name')||userName||'Khách';
   const savedAvatar=localStorage.getItem('mb_avatar_id')||avatarId;
   const realtimeUrl=resolveRealtimeUrl();
 
   const socket=io(realtimeUrl,{
-   query:{room:roomId,name:savedName,avatarId:savedAvatar},
+   query:{
+    room:roomId,
+    name:savedName,
+    avatarId:savedAvatar,
+    loginMode,
+    adminKey:loginMode==='admin'?activeAdminKey:'',
+   },
    transports:['websocket','polling'],
    reconnectionAttempts:10,
   });
@@ -244,6 +285,61 @@ export default function MusicBoxClient(){
    setMySocketId(socket.id||'');
    socket.emit('time:ping',{clientSentTime:Date.now()});
    socket.emit('webrtc:ready');
+  });
+
+  socket.on('auth:error',({message:errMsg}:{code?:string;message:string})=>{
+   setLobbyError(errMsg||'Mã khóa Admin không hợp lệ!');
+   setHasEnteredRoom(false);
+   setSocketConnected(false);
+  });
+
+  socket.on('auth:success',({roomId:confirmedRoom,isSuperAdmin,isHost}:{roomId:string;isSuperAdmin:boolean;isHost:boolean})=>{
+   setLobbyError(null);
+   setHasEnteredRoom(true);
+   if(confirmedRoom){
+    setRoomId(confirmedRoom);
+    setRoomInput(confirmedRoom);
+    localStorage.setItem('mb_room_id',confirmedRoom);
+   }
+   if(isSuperAdmin){
+    setMessage(`👑 Đã đăng nhập quyền Admin & Chủ phòng (#${confirmedRoom})!`);
+   }else if(isHost){
+    setMessage(`👑 Bạn là Chủ phòng đầu tiên của phòng #${confirmedRoom}!`);
+   }else{
+    setMessage(`🎧 Đã vào phòng #${confirmedRoom} cùng mọi người.`);
+   }
+  });
+
+  socket.on('room:id_changed',({roomId:nextId,by}:{roomId:string;by:string})=>{
+   if(!nextId)return;
+   setRoomId(nextId);
+   setRoomInput(nextId);
+   localStorage.setItem('mb_room_id',nextId);
+   setVoiceNotice(`🔑 Chủ phòng (${by}) đã đổi ID phòng sang: ${nextId}`);
+   setMessage(`🔑 ID phòng hiện tại đã đổi thành: ${nextId}`);
+   setTimeout(()=>setVoiceNotice(null),4000);
+  });
+
+  socket.on('admin:force_mute',({message:muteMsg}:{message:string})=>{
+   stopMicrophone();
+   setVoiceNotice(muteMsg||'🔇 Admin đã tắt tiếng cả phòng.');
+   setMessage(muteMsg||'🔇 Admin đã bật chế độ Im lặng cả phòng.');
+   setTimeout(()=>setVoiceNotice(null),4500);
+  });
+
+  socket.on('room:notice',({message:noticeMsg}:{message:string})=>{
+   if(noticeMsg){
+    setVoiceNotice(noticeMsg);
+    setTimeout(()=>setVoiceNotice(null),3500);
+   }
+  });
+
+  socket.on('room:kicked',({message:kickMsg}:{message:string})=>{
+   stopMicrophone();
+   setHasEnteredRoom(false);
+   setRoomState(null);
+   setRemoteMovedMap({});
+   setLobbyError(kickMsg||'Bạn đã bị Admin mời ra khỏi phòng.');
   });
 
   socket.on('time:pong',({clientSentTime,serverTime}:{clientSentTime:number;serverTime:number})=>{
@@ -344,6 +440,19 @@ export default function MusicBoxClient(){
    setSocketConnected(false);
   });
 
+  socket.on('connect_error',()=>{
+   setSocketConnected(false);
+   // Local fallback if realtime server is not running
+   if(loginMode==='admin'&&activeAdminKey!=='290105'){
+    setLobbyError('Mã khóa Admin không chính xác! Vui lòng kiểm tra lại hoặc vào với tư cách Guest.');
+    setHasEnteredRoom(false);
+    socket.disconnect();
+    return;
+   }
+   setLobbyError(null);
+   setHasEnteredRoom(true);
+  });
+
   socketRef.current=socket;
   return ()=>{
    socket.disconnect();
@@ -353,7 +462,39 @@ export default function MusicBoxClient(){
    }
   };
  // eslint-disable-next-line react-hooks/exhaustive-deps
- },[roomId]);
+ },[connectTrigger,stopMicrophone]);
+
+ // Enter room from Lobby Modal (Guest or Admin with Key + 4-digit Room ID)
+ const handleEnterRoomFromLobby=useCallback(()=>{
+  const cleanDigits=formatRoomDigits(roomInput||'1234');
+  const cleanName=userName.trim().slice(0,28)||(loginMode==='admin'?'Admin':'Khách');
+  if(loginMode==='admin'&&!adminKeyInput.trim()){
+   setLobbyError('Vui lòng nhập Mã khóa Admin (Admin Key) để đăng nhập quyền Admin!');
+   return;
+  }
+  setLobbyError(null);
+  setRoomInput(cleanDigits);
+  setRoomId(cleanDigits);
+  setUserName(cleanName);
+  setRemoteMovedMap({});
+  if(typeof window!=='undefined'){
+   localStorage.setItem('mb_user_name',cleanName);
+   localStorage.setItem('mb_avatar_id',avatarId);
+   localStorage.setItem('mb_room_id',cleanDigits);
+   // Keep single clean web URL without ?room= query string as requested
+   if(window.location.search){
+    window.history.replaceState({},'',window.location.pathname);
+   }
+  }
+  setActiveAdminKey(adminKeyInput.trim());
+  setConnectTrigger(c=>c+1);
+ },[roomInput,userName,loginMode,adminKeyInput,avatarId]);
+
+ // Generate random 4-digit Room ID
+ const handleRandomRoomDigits=useCallback(()=>{
+  const rand=String(Math.floor(1000+Math.random()*9000));
+  setRoomInput(rand);
+ },[]);
 
  // Sync avatar selection changes to room
  const handleChangeAvatar=useCallback((nextAvatar:string)=>{
@@ -376,59 +517,38 @@ export default function MusicBoxClient(){
   setTimeout(()=>setVoiceNotice(null),2200);
  },[socketConnected]);
 
- // Switch or create a new room code
- const handleJoinRoom=useCallback((targetRoomRaw?:string)=>{
-  const raw=(targetRoomRaw??roomInput).trim().toLowerCase().replace(/[^a-z0-9-_]/g,'-').replace(/-+/g,'-').replace(/^-|-$/g,'').slice(0,32)||'music-box-20';
-  setRoomInput(raw);
-  setRoomId(raw);
+ // Host/Admin changes the 4-digit Room ID for the entire room, or Guest switches to another 4-digit room
+ const handleApplyRoomDigits=useCallback((asHostRename:boolean)=>{
+  const cleanDigits=formatRoomDigits(roomInput||'1234');
+  setRoomInput(cleanDigits);
+  if(asHostRename&&socketRef.current&&socketConnected){
+   socketRef.current.emit('room:change_id',{newRoomId:cleanDigits});
+   return;
+  }
+  setRoomId(cleanDigits);
   setRemoteMovedMap({});
   if(typeof window!=='undefined'){
-   const url=new URL(window.location.href);
-   url.searchParams.set('room',raw);
-   window.history.replaceState({},'',url.toString());
+   localStorage.setItem('mb_room_id',cleanDigits);
   }
-  setVoiceNotice(`✓ Đã chuyển sang phòng: ${raw}`);
+  setConnectTrigger(c=>c+1);
+  setVoiceNotice(`✓ Đã chuyển sang phòng #${cleanDigits}`);
   setTimeout(()=>setVoiceNotice(null),2500);
- },[roomInput]);
+ },[roomInput,socketConnected]);
 
- // Copy Shareable Room Invite Link
+ // Copy Single Web Link + 4-Digit Room ID
  const handleCopyShareLink=useCallback(()=>{
   if(typeof window==='undefined')return;
-  const url=new URL(window.location.href);
-  url.searchParams.set('room',roomId);
-  const shareUrl=url.toString();
-  void navigator.clipboard?.writeText(shareUrl).then(()=>{
+  const cleanOrigin=`${window.location.origin}${window.location.pathname}`.replace(/\/$/,'');
+  const shareText=`${cleanOrigin} | ID Phòng 4 số: ${roomId}`;
+  void navigator.clipboard?.writeText(shareText).then(()=>{
    setCopyCopied(true);
-   setMessage(`Đã sao chép link mời bạn bè vào phòng "${roomId}"!`);
+   setMessage(`Đã sao chép Link Web & ID Phòng: ${roomId}!`);
    setTimeout(()=>setCopyCopied(false),2600);
   }).catch(()=>{
    setCopyCopied(true);
    setTimeout(()=>setCopyCopied(false),2600);
   });
  },[roomId]);
-
- // Stop microphone and cleanup audio nodes
- const stopMicrophone=useCallback(()=>{
-  if(levelTimerRef.current){
-   window.clearInterval(levelTimerRef.current);
-   levelTimerRef.current=null;
-  }
-  if(localStreamRef.current){
-   for(const t of localStreamRef.current.getTracks())t.stop();
-   localStreamRef.current=null;
-  }
-  if(audioCtxRef.current){
-   void audioCtxRef.current.close().catch(()=>{});
-   audioCtxRef.current=null;
-   monitorGainRef.current=null;
-   delayGainRef.current=null;
-  }
-  setMicEnabled(false);
-  setMicLevel(0);
-  if(socketRef.current&&socketConnected){
-   socketRef.current.emit('audio:state',{isMuted:true,audioLevel:0});
-  }
- },[socketConnected]);
 
  // Toggle Online Singing Microphone
  const handleToggleMic=useCallback(async()=>{
@@ -439,8 +559,14 @@ export default function MusicBoxClient(){
    return;
   }
 
-  // Request mic permission in room if not yet granted
   const me=roomState?.members.find(m=>m.id===mySocketId);
+  if(roomState?.roomMuted&&!me?.isSuperAdmin){
+   setVoiceNotice('🔇 Admin đang bật chế độ Im lặng cả phòng! Bạn chưa thể mở Mic lúc này.');
+   setTimeout(()=>setVoiceNotice(null),3500);
+   return;
+  }
+
+  // Request mic permission in room if not yet granted
   if(me&&!me.canPublishMic&&socketRef.current){
    socketRef.current.emit('role:request_mic');
   }
@@ -700,8 +826,14 @@ export default function MusicBoxClient(){
  },[roomState?.members,mySocketId,remoteMovedMap]);
 
  const meMember=useMemo(()=>roomState?.members.find(m=>m.id===mySocketId),[roomState?.members,mySocketId]);
- const isAdmin=meMember?.role==='admin';
+ const isSuperAdmin=Boolean(meMember?.isSuperAdmin||(!socketConnected&&loginMode==='admin'&&activeAdminKey==='290105'));
+ const isHost=Boolean(meMember?.isHost||isSuperAdmin||!socketConnected);
+ const isAdmin=Boolean(isSuperAdmin||isHost||meMember?.role==='admin'||meMember?.role==='host');
  const isSinger=meMember?.role==='singer';
+ const currentHostMember=useMemo(()=>{
+  if(!roomState?.members)return null;
+  return roomState.members.find(m=>m.id===roomState.hostId||m.isHost)||roomState.members[0]||null;
+ },[roomState]);
 
  const command=useCallback((type:GameCommand['type'])=>{control.current.commands.push({type} as GameCommand);},[]);
  const onAction=useCallback((act:WorldAction)=>{
@@ -723,6 +855,7 @@ export default function MusicBoxClient(){
 
  useEffect(()=>{
   const down=(e:KeyboardEvent)=>{
+   if(!hasEnteredRoom)return;
    if(e.code==='Escape'){setShowHelp(false);return;}
    const el=e.target;if(el instanceof HTMLElement&&(el.isContentEditable||['INPUT','TEXTAREA','SELECT'].includes(el.tagName)))return;
    if(moveKeys.has(e.code)){control.current.keys.add(e.code);e.preventDefault();return;}
@@ -735,7 +868,7 @@ export default function MusicBoxClient(){
   const blur=()=>{control.current.keys.clear();control.current.joystick={x:0,y:0};control.current.runHeld=false;setKnob({x:0,y:0});};
   window.addEventListener('keydown',down);window.addEventListener('keyup',up);window.addEventListener('blur',blur);
   return ()=>{window.removeEventListener('keydown',down);window.removeEventListener('keyup',up);window.removeEventListener('blur',blur);};
- },[command,handleTogglePlay]);
+ },[command,handleTogglePlay,hasEnteredRoom]);
 
  const moveStick=(e:ReactPointerEvent<HTMLDivElement>)=>{
   const rect=stick.current?.getBoundingClientRect();if(!rect)return;
@@ -755,6 +888,125 @@ export default function MusicBoxClient(){
  const memberCount=roomState?.members.length||1;
 
  return <main className="music-app">
+  {/* ENTRY GATE / LOBBY MODAL: 2 Login Modes (Guest vs Admin Key) + 4-Digit Room ID */}
+  {!hasEnteredRoom&&(
+   <div className="lobby-overlay" role="dialog" aria-modal="true" aria-label="Cổng vào phòng Music Box Online">
+    <div className="lobby-card">
+     <div className="lobby-header">
+      <div className="lobby-logo">♫</div>
+      <div>
+       <h1>Music Box Online</h1>
+       <p>Phòng mở tự do 24/7 · Không giới hạn người tối thiểu · Hát &amp; Nghe nhạc 3D</p>
+      </div>
+     </div>
+
+     {/* 1. Role Selection: Guest vs Admin (with Key) */}
+     <div className="lobby-section">
+      <label className="lobby-label">1. Chọn tư cách vào phòng</label>
+      <div className="lobby-role-switch">
+       <button
+        type="button"
+        className={`lobby-role-btn ${loginMode==='guest'?'active':''}`}
+        onClick={()=>{setLoginMode('guest');setLobbyError(null);}}
+       >
+        <span className="role-icon">👤</span>
+        <strong>Khách (Guest)</strong>
+        <small>Vào tự do · Ai vào đầu tiên sẽ là Chủ phòng</small>
+       </button>
+       <button
+        type="button"
+        className={`lobby-role-btn admin-mode ${loginMode==='admin'?'active':''}`}
+        onClick={()=>{setLoginMode('admin');setLobbyError(null);}}
+       >
+        <span className="role-icon">👑</span>
+        <strong>Admin (Chủ Web)</strong>
+        <small>Đăng nhập bằng Key · Luôn là Chủ phòng + Kick / Tắt tiếng</small>
+       </button>
+      </div>
+     </div>
+
+     {/* Admin Key Field (Only when Admin mode is chosen) */}
+     {loginMode==='admin'&&(
+      <div className="lobby-section admin-key-box">
+       <label className="lobby-label" htmlFor="lobby-admin-key">🔑 Mã khóa Admin riêng (Admin Secret Key)</label>
+       <input
+        id="lobby-admin-key"
+        type="password"
+        className="lobby-input"
+        placeholder="Nhập mã khóa Admin của bạn..."
+        value={adminKeyInput}
+        onChange={e=>setAdminKeyInput(e.target.value)}
+        onKeyDown={e=>{if(e.key==='Enter')handleEnterRoomFromLobby();}}
+       />
+      </div>
+     )}
+
+     {/* 2. 4-Digit Room ID Selection */}
+     <div className="lobby-section">
+      <div className="slider-label-row">
+       <label className="lobby-label" htmlFor="lobby-room-digits">2. Nhập ID Phòng (4 chữ số)</label>
+       <button type="button" className="mini-pill-btn" onClick={handleRandomRoomDigits} title="Tạo mã phòng 4 số ngẫu nhiên">
+        🎲 Chọn ID ngẫu nhiên
+       </button>
+      </div>
+      <div className="digit-room-row">
+       <input
+        id="lobby-room-digits"
+        type="text"
+        inputMode="numeric"
+        maxLength={4}
+        className="digit-room-input"
+        placeholder="1234"
+        value={roomInput}
+        onChange={e=>setRoomInput(e.target.value.replace(/\D/g,'').slice(0,4))}
+        onKeyDown={e=>{if(e.key==='Enter')handleEnterRoomFromLobby();}}
+       />
+      </div>
+      <p className="lobby-hint">
+       💡 Web chỉ dùng <strong>1 đường link duy nhất</strong>. Hãy nhập cùng <strong>ID 4 chữ số</strong> với bạn bè để vào chung phòng (Chủ phòng có thể chọn hoặc đổi ID 4 số bất kỳ lúc nào).
+      </p>
+     </div>
+
+     {/* 3. Display Name & Chibi Avatar */}
+     <div className="lobby-grid-2">
+      <div className="lobby-section">
+       <label className="lobby-label" htmlFor="lobby-user-name">3. Tên hiển thị</label>
+       <input
+        id="lobby-user-name"
+        type="text"
+        className="lobby-input"
+        placeholder="Nhập tên của bạn..."
+        value={userName}
+        onChange={e=>setUserName(e.target.value)}
+        onKeyDown={e=>{if(e.key==='Enter')handleEnterRoomFromLobby();}}
+       />
+      </div>
+      <div className="lobby-section">
+       <label className="lobby-label" htmlFor="lobby-avatar-select">4. Nhân vật 3D</label>
+       <select
+        id="lobby-avatar-select"
+        className="lobby-select"
+        value={avatarId}
+        onChange={e=>setAvatarId(e.target.value)}
+       >
+        {CHARACTERS.map(a=><option key={a.id} value={a.id}>{a.name} ({a.id})</option>)}
+       </select>
+      </div>
+     </div>
+
+     {lobbyError&&(
+      <div className="lobby-error-banner" role="alert">
+       ⚠️ {lobbyError}
+      </div>
+     )}
+
+     <button type="button" className="lobby-enter-btn" onClick={handleEnterRoomFromLobby}>
+      {loginMode==='admin'?`👑 Đăng nhập Admin & Mở Phòng #${formatRoomDigits(roomInput||'1234')}`:`🚀 Vào Phòng #${formatRoomDigits(roomInput||'1234')} Ngay`}
+     </button>
+    </div>
+   </div>
+  )}
+
   {/* 3D Scene Viewport + True 3D CSS Perspective YouTube TV Screen */}
   <div className="scene-wrap" aria-label="Phòng Music Box 3D">
    <GameCanvas
@@ -763,6 +1015,10 @@ export default function MusicBoxClient(){
     controls={control}
     tvOverlayRefs={{stage:cssStageRef,camera:cssCameraRef,screen:cssScreenRef}}
     tvMedia={{videoId,title:videoTitle,playing:isPlaying,currentTime,duration}}
+    playerName={userName}
+    playerRole={isSuperAdmin?'admin':isHost?'host':meMember?.role||'listener'}
+    playerMuted={!micEnabled}
+    playerAudioLevel={micLevel}
     remoteMembers={remoteMembers}
     onLocalPose={handleLocalPose}
     onStatus={onStatus}
@@ -792,7 +1048,7 @@ export default function MusicBoxClient(){
    </div>
   </div>
 
-  {/* Clean Header Bar with Room Link Sharing & Quick Mic Toggle */}
+  {/* Clean Header Bar with 4-Digit Room ID Sharing, Role Badge & Quick Mic Toggle */}
   <header className="topbar">
    <div className="brand" onClick={()=>setPanelOpen(s=>!s)} title="Bấm để đóng/mở bảng điều khiển">
     <span className="brand-icon">♫</span>
@@ -802,10 +1058,18 @@ export default function MusicBoxClient(){
     <button
      className={`share-room-pill ${copyCopied?'copied':''}`}
      onClick={handleCopyShareLink}
-     title="Sao chép đường link mời bạn bè vào chung phòng này"
+     title="Sao chép Link Web duy nhất kèm ID Phòng 4 chữ số"
     >
-     <span>{copyCopied?'✓':'🔗'}</span>
-     <strong>{copyCopied?'Đã copy link!':`Phòng: ${roomId}`}</strong>
+     <span>{copyCopied?'✓':'🔑'}</span>
+     <strong>{copyCopied?`Đã copy Link & ID ${roomId}!`:`ID Phòng: ${roomId}`}</strong>
+    </button>
+    <button
+     className="share-room-pill"
+     onClick={()=>{setLobbyError(null);setHasEnteredRoom(false);}}
+     title="Mở bảng chọn ID phòng 4 số hoặc đổi tư cách Guest / Admin"
+    >
+     <span>{isSuperAdmin?'👑':isHost?'🏠':'🚪'}</span>
+     <strong>{isSuperAdmin?'Admin':isHost?'Chủ phòng':'Đổi ID / Vai trò'}</strong>
     </button>
     <button
      className={`mic-top-pill ${micEnabled?'mic-live':''}`}
@@ -1075,35 +1339,75 @@ export default function MusicBoxClient(){
        </div>
       </>
      ):(
-      /* TAB 2: HÁT ONLINE & CHIA SẺ PHÒNG */
+      /* TAB 2: HÁT ONLINE, ID PHÒNG 4 SỐ & QUYỀN CHỦ PHÒNG / ADMIN */
       <div className="voice-room-section">
-       {/* 1. Share Link & Room Switcher */}
+       {/* 1. Single Link + 4-Digit Room ID & Host Room ID Changer */}
        <div className="control-slider-block">
         <div className="slider-label-row">
-         <span>🔗 Link phòng chung</span>
-         <span className="mono-val">{roomId}</span>
+         <span>🔑 ID Phòng 4 chữ số</span>
+         <span className="mono-val">#{roomId}</span>
         </div>
         <button className="share-copy-full-btn" onClick={handleCopyShareLink}>
-         {copyCopied?'✓ Đã sao chép link mời bạn bè!':'📋 Sao chép link mời bạn bè vào phòng'}
+         {copyCopied?`✓ Đã copy Link Web & ID Phòng #${roomId}!`:`📋 Copy Link Web & ID Phòng (#${roomId})`}
         </button>
+        <div className="slider-label-row" style={{marginTop:3}}>
+         <span>{isHost||isSuperAdmin?'👑 Quyền Chủ phòng: Chọn ID 4 số':'🚪 Chuyển sang phòng 4 số khác'}</span>
+         <button
+          type="button"
+          className="mini-pill-btn"
+          onClick={handleRandomRoomDigits}
+          title="Random 4 chữ số"
+         >
+          🎲 Ngẫu nhiên
+         </button>
+        </div>
         <div className="room-join-row">
          <input
           type="text"
+          inputMode="numeric"
+          maxLength={4}
           className="yt-url-input"
-          placeholder="Nhập mã phòng (vd: phong-vip)"
+          placeholder="Nhập 4 số (vd: 1234)"
           value={roomInput}
-          onChange={e=>setRoomInput(e.target.value)}
-          onKeyDown={e=>{if(e.key==='Enter')handleJoinRoom();}}
+          onChange={e=>setRoomInput(e.target.value.replace(/\D/g,'').slice(0,4))}
+          onKeyDown={e=>{if(e.key==='Enter')handleApplyRoomDigits(isHost||isSuperAdmin);}}
          />
-         <button className="url-queue-btn" onClick={()=>handleJoinRoom()}>Đổi phòng</button>
+         <button
+          className="url-queue-btn"
+          onClick={()=>handleApplyRoomDigits(isHost||isSuperAdmin)}
+          title={isHost||isSuperAdmin?'Đổi ID 4 số cho toàn bộ phòng này':'Chuyển sang phòng có ID 4 số này'}
+         >
+          {isHost||isSuperAdmin?'Đổi ID Phòng':'Vào phòng'}
+         </button>
         </div>
        </div>
 
-       {/* 2. User Display Name */}
+       {/* 2. Exclusive Super Admin Controls (Mute Entire Room) */}
+       {isSuperAdmin&&(
+        <div className="control-slider-block admin-power-box">
+         <div className="slider-label-row">
+          <span>👑 Quyền Admin (Chủ Web)</span>
+          <span className="mono-val">{roomState?.roomMuted?'Đang khóa Mic':'Mic tự do'}</span>
+         </div>
+         <button
+          type="button"
+          className={`mute-all-btn ${roomState?.roomMuted?'is-muted-all':''}`}
+          onClick={()=>{
+           socketRef.current?.emit('admin:mute_all',{muted:!roomState?.roomMuted});
+          }}
+         >
+          {roomState?.roomMuted?'🔊 Mở khóa Mic cho cả phòng':'🔇 Im lặng cả phòng (Tắt Mic tất cả Guest)'}
+         </button>
+        </div>
+       )}
+
+       {/* 3. User Display Name & Current Host Info */}
        <div className="control-slider-block">
         <div className="slider-label-row">
-         <span>👤 Tên hiển thị của bạn</span>
-         <span className="mono-val">{meMember?.role==='admin'?'👑 Chủ phòng':meMember?.role==='singer'?'🎤 Ca sĩ':meMember?.role==='invited_singer'?'🎶 Hát phụ':'🎧 Khách'}</span>
+         <span>👤 Tên của bạn</span>
+         <span className="mono-val">
+          {isSuperAdmin?'👑 Admin (Chủ phòng)':isHost?'👑 Chủ phòng':isSinger?'🎤 Ca sĩ':meMember?.role==='invited_singer'?'🎶 Hát phụ':'🎧 Khách'}
+         </span>
         </div>
         <div className="room-join-row">
          <input
@@ -1116,15 +1420,26 @@ export default function MusicBoxClient(){
          />
          <button className="url-queue-btn" onClick={()=>handleSaveName(userName)}>Lưu tên</button>
         </div>
+        {currentHostMember&&(
+         <div className="slider-label-row" style={{marginTop:2}}>
+          <span>🏠 Chủ phòng hiện tại:</span>
+          <span className="mono-val">{currentHostMember.name}{currentHostMember.isSuperAdmin?' (Admin)':''}</span>
+         </div>
+        )}
        </div>
 
-       {/* 3. Karaoke Microphone Toggle + Live VU Meter */}
+       {/* 4. Karaoke Microphone Toggle + Live VU Meter */}
        <div className="control-slider-block">
         <button
          className={`karaoke-mic-btn ${micEnabled?'mic-on':''}`}
          onClick={()=>{void handleToggleMic();}}
+         disabled={Boolean(roomState?.roomMuted&&!isSuperAdmin)}
         >
-         {micEnabled?'🔴 Đang Bật Mic Hát (Bấm để tắt)':'🎤 Bật Mic Hát Online'}
+         {roomState?.roomMuted&&!isSuperAdmin
+          ?'🔇 Admin đang bật Im lặng cả phòng'
+          :micEnabled
+           ?'🔴 Đang Bật Mic Hát (Bấm để tắt)'
+           :'🎤 Bật Mic Hát Online'}
         </button>
         <div className="vu-meter-wrap" title="Cường độ âm thanh giọng hát của bạn">
          <div className="vu-meter-bar" style={{width:`${micEnabled?Math.max(4,micLevel):0}%`}} />
@@ -1140,7 +1455,7 @@ export default function MusicBoxClient(){
         </div>
        </div>
 
-       {/* 4. Room Singers Voice Volume */}
+       {/* 5. Room Singers Voice Volume */}
        <div className="control-slider-block">
         <div className="slider-label-row">
          <span>🔊 Âm lượng giọng hát phòng</span>
@@ -1159,53 +1474,55 @@ export default function MusicBoxClient(){
 
        {voiceNotice&&<p className="url-feedback-msg">{voiceNotice}</p>}
 
-       {/* 5. Online Members & Mic Role Management (Max 3 Mics) */}
+       {/* 6. Online Members & Host/Admin Controls (Mic + Admin Kick) */}
        <div className="queue-header-row">
-        <span>👥 Thành viên trong phòng ({memberCount}/20)</span>
-        <span className="mono-val">Tối đa 3 Mic</span>
+        <span>👥 Thành viên ({memberCount}/20)</span>
+        <span className="mono-val">{roomState?.roomMuted?'🔇 Đang tắt tiếng phòng':'Tối đa 3 Mic'}</span>
        </div>
        <div className="mini-queue-list member-list-scroll">
-        {(roomState?.members??[{id:'local',name:userName,role:'admin',isMuted:!micEnabled,audioLevel:micLevel,canPublishMic:true,joinedAt:0}]).map(m=>{
+        {(roomState?.members??[{id:'local',name:userName,role:isSuperAdmin?'admin':'host',isSuperAdmin,isHost:true,isMuted:!micEnabled,audioLevel:micLevel,canPublishMic:true,joinedAt:0}]).map(m=>{
          const isMe=m.id===mySocketId||m.id==='local';
          const singing=!m.isMuted&&(m.audioLevel||0)>6;
-         const roleBadge=m.role==='admin'?'👑':m.role==='singer'?'🎤':m.role==='invited_singer'?'🎶':'🎧';
+         const roleBadge=m.isSuperAdmin?'👑':m.isHost||m.role==='host'||m.role==='admin'?'🏠':m.role==='singer'?'🎤':m.role==='invited_singer'?'🎶':'🎧';
          return (
           <div key={m.id} className={`mini-queue-item ${singing?'member-singing':''}`}>
            <div className="queue-select-btn" style={{cursor:'default'}}>
-            <span className="queue-idx">{roleBadge}</span>
+            <span className="queue-idx" title={m.isSuperAdmin?'Admin (Chủ Web)':m.isHost?'Chủ phòng':'Thành viên'}>{roleBadge}</span>
             <span className="queue-song-name">
              {m.name}{isMe?' (Bạn)':''}
             </span>
             {!m.isMuted&&<span className="live-wave-dot" title="Đang mở Mic">🔊</span>}
            </div>
-           {!isMe&&(isAdmin||isSinger)&&(
+           {!isMe&&(isAdmin||isSinger||isSuperAdmin)&&(
             <div className="inline-mini-actions">
-             {!m.canPublishMic?(
-              <button
-               className="mini-pill-btn"
-               onClick={()=>socketRef.current?.emit('role:invite_singer',{targetId:m.id})}
-               title="Cấp quyền bật Mic hát cùng"
-              >
-               +🎤
-              </button>
-             ):(
-              m.role!=='admin'&&(
+             {(isAdmin||isSinger)&&(
+              !m.canPublishMic?(
                <button
                 className="mini-pill-btn"
-                onClick={()=>socketRef.current?.emit('role:revoke_mic',{targetId:m.id})}
-                title="Thu hồi Mic"
+                onClick={()=>socketRef.current?.emit('role:invite_singer',{targetId:m.id})}
+                title="Cấp quyền bật Mic hát cùng"
                >
-                Tắt
+                +🎤
                </button>
+              ):(
+               !m.isSuperAdmin&&(
+                <button
+                 className="mini-pill-btn"
+                 onClick={()=>socketRef.current?.emit('role:revoke_mic',{targetId:m.id})}
+                 title="Thu hồi Mic"
+                >
+                 Tắt
+                </button>
+               )
               )
              )}
-             {isAdmin&&m.role!=='singer'&&(
+             {isSuperAdmin&&(
               <button
-               className="mini-pill-btn"
-               onClick={()=>socketRef.current?.emit('role:assign_singer',{targetId:m.id})}
-               title="Chỉ định làm Ca sĩ chính"
+               className="mini-pill-btn kick-btn"
+               onClick={()=>socketRef.current?.emit('admin:kick',{targetId:m.id})}
+               title={`Đuổi ${m.name} khỏi phòng (Quyền Admin)`}
               >
-               🎤Chính
+               👢 Kick
               </button>
              )}
             </div>

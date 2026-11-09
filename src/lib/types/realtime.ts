@@ -1,9 +1,11 @@
-export type UserRole = 'admin' | 'singer' | 'invited_singer' | 'listener';
+export type UserRole = 'admin' | 'host' | 'singer' | 'invited_singer' | 'listener';
 
 export interface RoomMember {
   id: string;
   name: string;
   role: UserRole;
+  isSuperAdmin?: boolean;
+  isHost?: boolean;
   isMuted: boolean;
   audioLevel: number; // 0 - 100
   canPublishMic: boolean;
@@ -40,8 +42,10 @@ export interface QueueItem {
 export interface RoomState {
   roomId: string;
   adminId: string;
+  hostId: string;
   singerId: string;
   invitedSingerIds: string[];
+  roomMuted?: boolean;
   members: RoomMember[];
   playback: PlaybackState;
   queue: QueueItem[];

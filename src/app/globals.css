@@ -157,6 +157,42 @@
 .circular-action-btn:active{transform:scale(0.92);background:rgba(255, 255, 255, 0.8)}
 .action-icon{font-size:23px;filter:drop-shadow(0 2px 4px rgba(0,0,0,0.18))}
 
+/* Entry Gate / Lobby Modal Overlay (Guest vs Admin Key + 4-Digit Room ID) */
+.lobby-overlay{position:fixed;inset:0;z-index:60;background:radial-gradient(circle at center,rgba(46,28,54,0.58),rgba(24,14,30,0.78));backdrop-filter:blur(10px);display:grid;place-items:center;padding:16px}
+.lobby-card{width:100%;max-width:440px;background:rgba(255,250,253,0.97);border:2px solid #ffffff;border-radius:20px;padding:18px 20px;box-shadow:0 24px 60px rgba(35,18,45,0.42);display:flex;flex-direction:column;gap:12px;color:#5f425d}
+.lobby-header{display:flex;align-items:center;gap:12px;border-bottom:1px solid #f0dfec;padding-bottom:10px}
+.lobby-logo{width:44px;height:44px;border-radius:14px;background:linear-gradient(135deg,#ff7aa8,#b973d8);color:#fff;font-size:24px;display:grid;place-items:center;box-shadow:0 6px 16px rgba(210,100,170,0.35);flex-shrink:0}
+.lobby-header h1{margin:0;font-size:18px;font-weight:900;color:#633a5e;letter-spacing:-.3px}
+.lobby-header p{margin:2px 0 0;font-size:11px;color:#8e6d8b;font-weight:700}
+.lobby-section{display:flex;flex-direction:column;gap:5px}
+.lobby-label{font-size:11px;font-weight:850;color:#6f486b}
+.lobby-role-switch{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.lobby-role-btn{border:1.5px solid #ead5e6;border-radius:12px;background:#fff9fc;padding:9px 10px;text-align:left;display:flex;flex-direction:column;gap:2px;transition:all .15s ease;color:#6b4b68}
+.lobby-role-btn:hover{border-color:#d9a7ce;background:#fdf2f9}
+.lobby-role-btn.active{border-color:#e06ca9;background:linear-gradient(135deg,#fff0f7,#f6e8fc);box-shadow:0 4px 14px rgba(215,105,170,0.22)}
+.lobby-role-btn.admin-mode.active{border-color:#b973d8;background:linear-gradient(135deg,#f9edff,#ffeef7)}
+.role-icon{font-size:18px}
+.lobby-role-btn strong{font-size:12px;font-weight:900;color:#5c3558}
+.lobby-role-btn small{font-size:9.5px;line-height:1.25;color:#8c6c89;font-weight:700}
+.admin-key-box{background:#fdf3fa;border:1px dashed #df9ec8;border-radius:10px;padding:8px 10px}
+.digit-room-row{display:flex;align-items:center;gap:8px}
+.digit-room-input{width:100%;border:2px solid #dfbad7;border-radius:11px;padding:8px 12px;font-size:22px;font-weight:900;letter-spacing:10px;text-align:center;background:#ffffff;color:#61325c;font-family:ui-monospace,Consolas,monospace;user-select:text;-webkit-user-select:text}
+.lobby-hint{margin:0;font-size:10px;line-height:1.35;color:#8c6b89}
+.lobby-grid-2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.lobby-input,.lobby-select{width:100%;border:1.5px solid #e4cce0;border-radius:9px;padding:7px 9px;font-size:11.5px;font-weight:750;background:#ffffff;color:#593b56;user-select:text;-webkit-user-select:text}
+.lobby-error-banner{background:#fff0f3;border:1px solid #f5a3b8;color:#c8235a;border-radius:9px;padding:7px 10px;font-size:11px;font-weight:800}
+.lobby-enter-btn{width:100%;border:0;border-radius:12px;padding:11px 14px;font-size:13px;font-weight:900;background:linear-gradient(135deg,#ff6b9d,#a564d3);color:#ffffff;box-shadow:0 8px 22px rgba(195,90,165,0.38);transition:transform .12s ease,filter .12s ease}
+.lobby-enter-btn:hover{filter:brightness(1.05);transform:translateY(-1px)}
+.lobby-enter-btn:active{transform:translateY(0)}
+
+/* Admin Exclusive Controls inside Voice Tab */
+.admin-power-box{border-color:#e4b5f0;background:linear-gradient(135deg,#fdf5ff,#fff2f9)}
+.mute-all-btn{width:100%;border:1px solid #d99ce8;border-radius:7px;padding:5px 8px;font-size:9.5px;font-weight:900;background:linear-gradient(135deg,#9b5de5,#f15bb5);color:#ffffff;transition:filter .12s ease}
+.mute-all-btn:hover{filter:brightness(1.06)}
+.mute-all-btn.is-muted-all{background:linear-gradient(135deg,#10b981,#059669);border-color:#6ee7b7}
+.kick-btn{background:#fff0f3!important;border-color:#f5a3b8!important;color:#c92a5d!important}
+.kick-btn:hover{background:#ffdbe4!important}
+
 @media(max-width:768px){
  .keyboard-help{display:none}
  .right-panel-stack{width:225px;right:10px;top:54px;max-height:calc(100vh - 130px)}
