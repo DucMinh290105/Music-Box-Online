@@ -1050,9 +1050,10 @@ export default function MusicBoxClient(){
 
   {/* Clean Header Bar with 4-Digit Room ID Sharing, Role Badge & Quick Mic Toggle */}
   <header className="topbar">
-   <div className="brand" onClick={()=>setPanelOpen(s=>!s)} title="Bấm để đóng/mở bảng điều khiển">
+   <div className="brand" onClick={()=>setPanelOpen(s=>!s)} title="Bấm để đóng/mở bảng nhân vật">
     <span className="brand-icon">♫</span>
-    <strong>Music Box Online</strong>
+    <strong className="brand-text-full">Music Box Online</strong>
+    <strong className="brand-text-mobile">Music Box</strong>
    </div>
    <div className="topbar-actions">
     <button
@@ -1061,15 +1062,17 @@ export default function MusicBoxClient(){
      title="Sao chép Link Web duy nhất kèm ID Phòng 4 chữ số"
     >
      <span>{copyCopied?'✓':'🔑'}</span>
-     <strong>{copyCopied?`Đã copy Link & ID ${roomId}!`:`ID Phòng: ${roomId}`}</strong>
+     <strong className="hide-on-mobile">{copyCopied?`Đã copy Link & ID ${roomId}!`:`ID Phòng: ${roomId}`}</strong>
+     <strong className="show-on-mobile">{copyCopied?'Đã copy':roomId}</strong>
     </button>
     <button
-     className="share-room-pill"
+     className="share-room-pill role-pill"
      onClick={()=>{setLobbyError(null);setHasEnteredRoom(false);}}
      title="Mở bảng chọn ID phòng 4 số hoặc đổi tư cách Guest / Admin"
     >
      <span>{isSuperAdmin?'👑':isHost?'🏠':'🚪'}</span>
-     <strong>{isSuperAdmin?'Admin':isHost?'Chủ phòng':'Đổi ID / Vai trò'}</strong>
+     <strong className="hide-on-mobile">{isSuperAdmin?'Admin':isHost?'Chủ phòng':'Đổi ID / Vai trò'}</strong>
+     <strong className="show-on-mobile">{isSuperAdmin?'Admin':isHost?'Chủ':''}</strong>
     </button>
     <button
      className={`mic-top-pill ${micEnabled?'mic-live':''}`}
@@ -1077,7 +1080,8 @@ export default function MusicBoxClient(){
      title={micEnabled?'Đang bật Mic hát online (Bấm để tắt)':'Bấm để bật Mic hát online cùng mọi người'}
     >
      <span>{micEnabled?'🔴':'🎤'}</span>
-     <strong>{micEnabled?'Đang Hát':'Hát Online'}</strong>
+     <strong className="hide-on-mobile">{micEnabled?'Đang Hát':'Hát Online'}</strong>
+     <strong className="show-on-mobile">{micEnabled?'Hát':'Mic'}</strong>
     </button>
     <div
      className="user-count-pill"
@@ -1086,7 +1090,7 @@ export default function MusicBoxClient(){
      title={socketConnected?'Đã kết nối máy chủ đồng bộ (Bấm để xem thành viên)':'Chế độ phòng đơn (Local)'}
     >
      <span className={`sync-dot ${socketConnected?'online':'local'}`} />
-     <span>👥</span> <strong>{memberCount}/20</strong>
+     <span>👥</span> <strong>{memberCount}</strong>
     </div>
     <button
      className={`icon-btn ${audioPanelOpen?'active-icon-btn':''}`}
@@ -1096,7 +1100,7 @@ export default function MusicBoxClient(){
     >
      🎵
     </button>
-    <button className="icon-btn" onClick={()=>command('dance')} aria-label="Cảm xúc / Nhảy múa" title="Nhảy múa">😊</button>
+    <button className="icon-btn hide-on-xs" onClick={()=>command('dance')} aria-label="Cảm xúc / Nhảy múa" title="Nhảy múa">😊</button>
     <button
      className={`icon-btn ${panelOpen?'active-icon-btn':''}`}
      onClick={()=>setPanelOpen(s=>!s)}

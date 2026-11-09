@@ -193,12 +193,47 @@
 .kick-btn{background:#fff0f3!important;border-color:#f5a3b8!important;color:#c92a5d!important}
 .kick-btn:hover{background:#ffdbe4!important}
 
+/* Mobile / Desktop Text Visibility Helpers */
+.brand-text-mobile{display:none}
+.show-on-mobile{display:none}
+.hide-on-mobile{display:inline}
+
 @media(max-width:768px){
+ .brand-text-full{display:none}
+ .brand-text-mobile{display:inline}
+ .hide-on-mobile{display:none}
+ .show-on-mobile{display:inline}
  .keyboard-help{display:none}
- .right-panel-stack{width:225px;right:10px;top:54px;max-height:calc(100vh - 130px)}
- .center-interact-badge{bottom:150px;left:50%}
- .circular-action-btn{width:48px;height:48px}
+
+ /* Topbar on Mobile: Single horizontal clean row without wrapping or stacking */
+ .topbar{top:8px;left:8px;right:8px;gap:6px}
+ .brand{padding:5px 9px;border-radius:18px;gap:4px}
+ .brand-icon{font-size:14px}
+ .brand strong{font-size:11.5px}
+ .topbar-actions{gap:4px;flex-wrap:nowrap;justify-content:flex-end}
+ .user-count-pill,.share-room-pill,.mic-top-pill{padding:5px 8px;font-size:10.5px;border-radius:18px;gap:3px}
+ .user-count-pill strong,.share-room-pill strong,.mic-top-pill strong{font-size:10.5px}
+ .icon-btn{width:32px;height:32px;font-size:13.5px}
+
+ /* Mobile Panel Sheet: Clean popup centered at top right */
+ .right-panel-stack{width:calc(100vw - 16px);max-width:340px;right:8px;top:48px;max-height:calc(100vh - 85px)}
+
+ /* Mobile Interactive Button: Right thumb reachable action button */
+ .center-interact-badge{position:absolute;bottom:88px;right:18px;left:auto;transform:none;border-radius:24px;padding:9px 18px;font-size:13px;font-weight:900;background:linear-gradient(135deg,rgba(232,67,147,0.96),rgba(155,89,182,0.96));border:2px solid #ffffff;box-shadow:0 8px 24px rgba(60,20,70,0.4)}
+ .center-interact-badge kbd{display:none}
+
+ /* Mobile Controls */
+ .circular-action-btn{width:46px;height:46px}
  .action-icon{font-size:20px}
- .bottom-left-controls{transform:scale(.85);transform-origin:left bottom;bottom:14px;left:14px}
+ .bottom-left-controls{transform:scale(.82);transform-origin:left bottom;bottom:12px;left:12px}
+ .bottom-right-actions{bottom:14px;right:14px;gap:10px}
 }
+
+@media(max-width:380px){
+ .hide-on-xs{display:none}
+ .brand strong{display:none}
+ .topbar-actions{gap:3px}
+ .user-count-pill,.share-room-pill,.mic-top-pill{padding:5px 6px;font-size:10px}
+}
+
 @media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
