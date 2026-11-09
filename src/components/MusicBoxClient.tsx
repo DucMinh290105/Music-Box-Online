@@ -4,7 +4,7 @@ import dynamic from 'next/dynamic';
 import io,{type Socket} from 'socket.io-client';
 import {CHARACTERS} from '@/game/actors/roster';
 import {ROOM} from '@/game/data/room';
-import {createControls,type Controls,type GameCommand} from '@/game/input/controller';
+import {createControls,type Controls,type GameCommand,type CameraMode} from '@/game/input/controller';
 import {joystickFromPointer} from '@/game/core/movement';
 import type {WorldAction,WorldStatus,LocalPlayerPose} from '@/game/GameWorld';
 import {preloadGameAssets} from '@/game/assets/AssetManager';
@@ -63,7 +63,7 @@ export default function MusicBoxClient(){
  const [audioPanelOpen,setAudioPanelOpen]=useState(true);
  const [activeTab,setActiveTab]=useState<'music'|'voice'>('music');
  const [showJoystick,setShowJoystick]=useState(false);
- const [cameraMode,setCameraMode]=useState<'follow'|'overview'>('follow');
+ const [cameraMode,setCameraMode]=useState<CameraMode>('follow');
  const control=useRef<Controls>(createControls());
  const stick=useRef<HTMLDivElement>(null);
  const pointer=useRef<number|null>(null);
@@ -881,7 +881,18 @@ export default function MusicBoxClient(){
   if(e.currentTarget.hasPointerCapture(e.pointerId))e.currentTarget.releasePointerCapture(e.pointerId);
   control.current.joystick={x:0,y:0};setKnob({x:0,y:0});};
 
- const toggleCamera=()=>{command('camera-toggle');setCameraMode(s=>s==='follow'?'overview':'follow');};
+ const handleSelectCameraMode=useCallback((nextMode:CameraMode)=>{
+  setCameraMode(nextMode);
+  control.current.cameraMode=nextMode;
+  control.current.commands.push({type:'camera-mode',mode:nextMode});
+  const modeLabel=nextMode==='first-person'?'Góc nhìn thứ nhất (Nhập vai)':nextMode==='overview'?'Góc nhìn toàn cảnh':'Góc nhìn thứ 3 (Theo nhân vật)';
+  setMessage(`Đã chuyển sang: ${modeLabel}.`);
+ },[]);
+
+ const toggleCamera=()=>{
+  const nextMode:CameraMode=cameraMode==='follow'?'first-person':cameraMode==='first-person'?'overview':'follow';
+  handleSelectCameraMode(nextMode);
+ };
  const doInteract=()=>command(status.seated?'stand':'interact');
  const busy=status.seatPhase!=='idle'&&status.seatPhase!=='sitting';
  const canInteract=status.seated||!!status.near;
@@ -1124,8 +1135,20 @@ export default function MusicBoxClient(){
      <select id="select-avatar" value={avatarId} onChange={e=>handleChangeAvatar(e.target.value)}>
       {CHARACTERS.map(a=><option key={a.id} value={a.id}>{a.name} · {a.id}</option>)}
      </select>
+     <label htmlFor="select-camera-mode" style={{marginTop:5}}>Chọn góc nhìn camera</label>
+     <select
+      id="select-camera-mode"
+      value={cameraMode}
+      onChange={e=>handleSelectCameraMode(e.target.value as CameraMode)}
+     >
+      <option value="follow">🎥 Góc nhìn thứ 3 (Theo nhân vật)</option>
+      <option value="first-person">👁️ Góc nhìn thứ nhất (Nhập vai)</option>
+      <option value="overview">◎ Góc nhìn toàn cảnh phòng</option>
+     </select>
      <div className="panel-buttons">
-      <button onClick={toggleCamera}>{cameraMode==='follow'?'◎ Toàn cảnh':'◎ Theo nhân vật'}</button>
+      <button onClick={toggleCamera} title="Đổi nhanh giữa Góc nhìn thứ 3 / Thứ nhất / Toàn cảnh">
+       {cameraMode==='follow'?'👁️ Góc nhìn 1':cameraMode==='first-person'?'◎ Toàn cảnh':'🎥 Theo sau'}
+      </button>
       <button onClick={()=>{command('camera-reset');setCameraMode('follow');}}>↺ Camera</button>
       <button onClick={()=>command('wave')} disabled={busy||status.seated}>👋 Vẫy tay</button>
       <button onClick={()=>command('dance')} disabled={busy||status.seated}>♫ Nhảy múa</button>

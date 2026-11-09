@@ -1,6 +1,6 @@
 import type {Stick} from '../core/movement.ts';
-export type CameraMode='follow'|'overview';
-export type GameCommand={type:'interact'|'stand'|'reset'|'camera-reset'|'camera-toggle'|'focus-tv'|'wave'|'dance'|'jump'};
+export type CameraMode='follow'|'overview'|'first-person';
+export type GameCommand={type:'interact'|'stand'|'reset'|'camera-reset'|'camera-toggle'|'camera-mode'|'focus-tv'|'wave'|'dance'|'jump';mode?:CameraMode};
 export interface Controls {
  keys:Set<string>;joystick:Stick;runHeld:boolean;
  cameraYaw:number;cameraElevation:number;cameraDistance:number;cameraMode:CameraMode;

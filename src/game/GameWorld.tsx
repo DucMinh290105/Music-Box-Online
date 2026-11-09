@@ -347,7 +347,12 @@ export default function GameWorld({avatarId,roomSizeMode,controls,onStatus,onAct
     avatar.current?.setAction('idle');report('Đã về vị trí xuất hiện.');
    }
    else if(cmd.type==='camera-reset')resetCamera(ctl,5.2,.2);
-   else if(cmd.type==='camera-toggle')ctl.cameraMode=ctl.cameraMode==='overview'?'follow':'overview';
+   else if(cmd.type==='camera-toggle'){
+    ctl.cameraMode=ctl.cameraMode==='follow'?'first-person':ctl.cameraMode==='first-person'?'overview':'follow';
+   }
+   else if(cmd.type==='camera-mode'&&cmd.mode){
+    ctl.cameraMode=cmd.mode;
+   }
    else if(cmd.type==='focus-tv'){
     toggleTv();
    }
@@ -376,24 +381,46 @@ export default function GameWorld({avatarId,roomSizeMode,controls,onStatus,onAct
    }else if(avatar.current&&['walk','run'].includes(avatar.current.state))avatar.current.setAction('idle');
   }else if(avatar.current&&['walk','run'].includes(avatar.current.state))avatar.current.setAction('idle');
   avatar.current?.update(dt);
+  const isFirstPerson=ctl.cameraMode==='first-person';
+  if(avatar.current?.root)avatar.current.root.visible=!isFirstPerson;
+  if(placeholder.current)placeholder.current.visible=!isFirstPerson&&!ready.current;
   if(localNametagRef.current){
+   localNametagRef.current.visible=!isFirstPerson;
    localNametagRef.current.rotation.y=-g.rotation.y;
   }
   ctl.cameraYaw-=ctl.orbitDelta.dx*.0046;
   ctl.cameraElevation=clamp(ctl.cameraElevation+ctl.orbitDelta.dy*.0035,-.8,1.18);
   ctl.cameraDistance=clamp(ctl.cameraDistance*ctl.zoomFactor,2.6,19);
   ctl.orbitDelta.dx=0;ctl.orbitDelta.dy=0;ctl.zoomFactor=1;
-  if(ctl.cameraMode==='overview')target.set(0,1.55,0);
-  else target.set(g.position.x,rt.phase==='sitting'?1.38:1.58,g.position.z);
-  const e=ctl.cameraMode==='overview'?Math.max(.76,ctl.cameraElevation):ctl.cameraElevation;
-  const distance=ctl.cameraMode==='overview'?Math.max(w,d)*.90:ctl.cameraDistance;
-  desired.set(target.x+Math.sin(ctl.cameraYaw)*Math.cos(e)*distance,target.y+Math.sin(e)*distance,
-              target.z+Math.cos(ctl.cameraYaw)*Math.cos(e)*distance);
-  target.multiplyScalar(visualScale);desired.multiplyScalar(visualScale);
-  constrainCamera(desired,visualScale,target);
-  const ease=1-Math.exp(-6.3*dt);
-  if(!initialized.current){camera.position.copy(desired);focus.current.copy(target);initialized.current=true;}
-  else{camera.position.lerp(desired,ease);focus.current.lerp(target,ease);}
+  if(isFirstPerson){
+   const eyeHeight=rt.phase==='sitting'?1.06:1.38;
+   const pitch=clamp(-ctl.cameraElevation,-0.75,0.75);
+   const lookDist=8;
+   desired.set(g.position.x,g.position.y+eyeHeight,g.position.z).multiplyScalar(visualScale);
+   target.set(
+    desired.x-Math.sin(ctl.cameraYaw)*Math.cos(pitch)*lookDist,
+    desired.y+Math.sin(pitch)*lookDist,
+    desired.z-Math.cos(ctl.cameraYaw)*Math.cos(pitch)*lookDist
+   );
+   if(rt.phase==='idle'&&input.strength<=.01){
+    g.rotation.y=ctl.cameraYaw+Math.PI;
+   }
+   const fpEase=1-Math.exp(-22*dt);
+   if(!initialized.current){camera.position.copy(desired);focus.current.copy(target);initialized.current=true;}
+   else{camera.position.lerp(desired,fpEase);focus.current.lerp(target,fpEase);}
+  }else{
+   if(ctl.cameraMode==='overview')target.set(0,1.55,0);
+   else target.set(g.position.x,rt.phase==='sitting'?1.38:1.58,g.position.z);
+   const e=ctl.cameraMode==='overview'?Math.max(.76,ctl.cameraElevation):ctl.cameraElevation;
+   const distance=ctl.cameraMode==='overview'?Math.max(w,d)*.90:ctl.cameraDistance;
+   desired.set(target.x+Math.sin(ctl.cameraYaw)*Math.cos(e)*distance,target.y+Math.sin(e)*distance,
+               target.z+Math.cos(ctl.cameraYaw)*Math.cos(e)*distance);
+   target.multiplyScalar(visualScale);desired.multiplyScalar(visualScale);
+   constrainCamera(desired,visualScale,target);
+   const ease=1-Math.exp(-6.3*dt);
+   if(!initialized.current){camera.position.copy(desired);focus.current.copy(target);initialized.current=true;}
+   else{camera.position.lerp(desired,ease);focus.current.lerp(target,ease);}
+  }
   constrainCamera(camera.position,visualScale);
   camera.lookAt(focus.current.x, focus.current.y, focus.current.z);
 
