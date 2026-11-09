@@ -36,12 +36,34 @@ function filterGeometryTriangles(
  return cloned;
 }
 
-/** Check if a vertex belongs to floating side-wall frames or the 2 3D wall shelves beside the TV. */
+/** Check if a vertex belongs to floating side-wall frames, the 3D wall shelves beside the TV, or the corrupted GLB speaker meshes. */
 function isRemovedWallDecorVertex(x: number, y: number, z: number): boolean {
  // 1. Floating picture frames / photo boards on left & right walls (photo_board_31, frame_32, frame_33, music_note_wall_34)
  if (Math.abs(x) > 8.65 && y > 2.2 && z > -5.8) return true;
  // 2. 3D wall shelves beside the TV (wall_shelf_27, wall_shelf_28, wall_shelf_29, wall_shelf_30)
- if (Math.abs(x) >= 3.1 && Math.abs(x) <= 6.35 && y >= 2.20 && y <= 3.20 && z <= -6.20) return true;
+ if (Math.abs(x) >= 3.1 && Math.abs(x) <= 6.35 && y >= 2.35 && y <= 3.20 && z <= -6.30) return true;
+ // 3. Corrupted/floating baked 3D speakers beside TV (speaker_4 & speaker_5 at x = ±3.75, replaced by clean 3D floor-standing speakers in RoomFinishes)
+ if (Math.abs(x) >= 3.45 && Math.abs(x) <= 4.06 && y >= 0.94 && y <= 2.40 && z <= -6.00) return true;
+ return false;
+}
+
+/** Check if a triangle belongs to the baked GLB floor carpets (carpet_20, carpet_21, carpet_22) so they don't intersect/Z-fight with the clean rugs in RoomFinishes. */
+function isBakedFloorCarpetTriangle(
+ meshName: string,
+ x0: number, y0: number, z0: number,
+ x1: number, y1: number, z1: number,
+ x2: number, y2: number, z2: number
+): boolean {
+ if (meshName !== 'static_group_1' && meshName !== 'static_group_4') return false;
+ if (y0 > 0.09 || y1 > 0.09 || y2 > 0.09) return false;
+ const cx = (x0 + x1 + x2) / 3;
+ const cz = (z0 + z1 + z2) / 3;
+ // Left baked carpet (carpet_3.2_2.4_20)
+ if (cx >= -6.3 && cx <= -2.9 && cz >= -1.5 && cz <= 1.1) return true;
+ // Right baked carpet (carpet_3.2_2.4_21)
+ if (cx >= 2.9 && cx <= 6.3 && cz >= -1.5 && cz <= 1.1) return true;
+ // Center/back baked carpet (carpet_5.1_2.6_22) that was intersecting the central lounge rug
+ if (cx >= -2.65 && cx <= 2.65 && cz >= 1.0 && cz <= 3.8) return true;
  return false;
 }
 
@@ -101,9 +123,13 @@ export default function RoomLoader(){
 
    if(o.name.startsWith('static_group_')&&!['static_group_23','static_group_24'].includes(o.name)){
     const baseGeom = o.geometry;
-    // Main room geometry: exclude removed wall decor AND exclude front-wall TV/speaker protrusions
+    const meshName = o.name;
+    // Main room geometry: exclude removed wall decor, baked floor carpets, AND front-wall TV protrusions
     o.geometry = filterGeometryTriangles(baseGeom, (x0, y0, z0, x1, y1, z1, x2, y2, z2) => {
      if (isRemovedWallDecorVertex(x0, y0, z0) || isRemovedWallDecorVertex(x1, y1, z1) || isRemovedWallDecorVertex(x2, y2, z2)) {
+      return false;
+     }
+     if (isBakedFloorCarpetTriangle(meshName, x0, y0, z0, x1, y1, z1, x2, y2, z2)) {
       return false;
      }
      if (isFrontWallProtrusionVertex(x0, y0, z0) || isFrontWallProtrusionVertex(x1, y1, z1) || isFrontWallProtrusionVertex(x2, y2, z2)) {
@@ -115,6 +141,9 @@ export default function RoomLoader(){
     // Front wall protrusion geometry (TV cabinet, TV arch, speaker plants): only visible when not looking from TV toward player
     const frontGeom = filterGeometryTriangles(baseGeom, (x0, y0, z0, x1, y1, z1, x2, y2, z2) => {
      if (isRemovedWallDecorVertex(x0, y0, z0) || isRemovedWallDecorVertex(x1, y1, z1) || isRemovedWallDecorVertex(x2, y2, z2)) {
+      return false;
+     }
+     if (isBakedFloorCarpetTriangle(meshName, x0, y0, z0, x1, y1, z1, x2, y2, z2)) {
       return false;
      }
      return isFrontWallProtrusionVertex(x0, y0, z0) || isFrontWallProtrusionVertex(x1, y1, z1) || isFrontWallProtrusionVertex(x2, y2, z2);

@@ -10,7 +10,7 @@ import type {WorldAction,WorldStatus,LocalPlayerPose} from '@/game/GameWorld';
 import {preloadGameAssets} from '@/game/assets/AssetManager';
 import YouTubePlayer,{type YouTubePlayerHandle} from '@/app/lab/audio-youtube/components/YouTubePlayer';
 import {extractYouTubeId} from '@/lib/youtube/urlParser';
-import type {RoomState,QueueItem,RoomMember} from '@/lib/types/realtime';
+import type {RoomState,QueueItem,RoomMember,ChatMessage} from '@/lib/types/realtime';
 
 const GameCanvas=dynamic(()=>import('./GameCanvas'),{ssr:false,
  loading:()=> <div className="loading-stage" role="status"><div className="loading-record">♫</div><p>Đang tải phòng Music Box 3D...</p></div>});
@@ -85,6 +85,15 @@ export default function MusicBoxClient(){
  const [copyCopied,setCopyCopied]=useState(false);
  const [remoteMovedMap,setRemoteMovedMap]=useState<Record<string,Partial<RoomMember>>>({});
 
+ // Left-Side Pop-up Room Chat State
+ const [chatOpen,setChatOpen]=useState(true);
+ const [chatMessages,setChatMessages]=useState<ChatMessage[]>([]);
+ const [chatInput,setChatInput]=useState('');
+ const [unreadChatCount,setUnreadChatCount]=useState(0);
+ const chatOpenRef=useRef(true);
+ chatOpenRef.current=chatOpen;
+ const chatListRef=useRef<HTMLDivElement|null>(null);
+
  // CSS3D Overlay Refs for projecting the live YouTube IFrame onto the 3D TV plane
  const cssStageRef=useRef<HTMLDivElement|null>(null);
  const cssCameraRef=useRef<HTMLDivElement|null>(null);
@@ -122,13 +131,34 @@ export default function MusicBoxClient(){
 
  const localStreamRef=useRef<MediaStream|null>(null);
  const peersRef=useRef<Map<string,RTCPeerConnection>>(new Map());
+ const pendingCandidatesRef=useRef<Map<string,RTCIceCandidateInit[]>>(new Map());
+ const webrtcConnectedPeersRef=useRef<Set<string>>(new Set());
  const remoteAudioElsRef=useRef<Map<string,HTMLAudioElement>>(new Map());
  const audioCtxRef=useRef<AudioContext|null>(null);
+ const voicePlaybackCtxRef=useRef<AudioContext|null>(null);
+ const voiceNextPlayTimeRef=useRef<Map<string,number>>(new Map());
+ const voiceProcessorRef=useRef<ScriptProcessorNode|null>(null);
+ const voiceVolumeRef=useRef<number>(90);
+ const rightPanelStackRef=useRef<HTMLDivElement|null>(null);
  const monitorGainRef=useRef<GainNode|null>(null);
  const delayGainRef=useRef<GainNode|null>(null);
  const levelTimerRef=useRef<number|null>(null);
 
  const queueList=roomState?.queue??localQueue;
+
+ // Ensure shared Web Audio playback context is unlocked on user interaction
+ const ensureVoicePlaybackCtx=useCallback(()=>{
+  if(typeof window==='undefined')return null;
+  const AudioCtx=window.AudioContext||(window as unknown as {webkitAudioContext:typeof AudioContext}).webkitAudioContext;
+  if(!AudioCtx)return null;
+  if(!voicePlaybackCtxRef.current||voicePlaybackCtxRef.current.state==='closed'){
+   voicePlaybackCtxRef.current=new AudioCtx();
+  }
+  if(voicePlaybackCtxRef.current.state==='suspended'){
+   void voicePlaybackCtxRef.current.resume().catch(()=>{});
+  }
+  return voicePlaybackCtxRef.current;
+ },[]);
 
  // Initialize saved user name, avatar, and last 4-digit Room ID
  useEffect(()=>{
@@ -151,6 +181,11 @@ export default function MusicBoxClient(){
   if(levelTimerRef.current){
    window.clearInterval(levelTimerRef.current);
    levelTimerRef.current=null;
+  }
+  if(voiceProcessorRef.current){
+   try{voiceProcessorRef.current.disconnect();}catch{}
+   voiceProcessorRef.current.onaudioprocess=null;
+   voiceProcessorRef.current=null;
   }
   if(localStreamRef.current){
    for(const t of localStreamRef.current.getTracks())t.stop();
@@ -176,11 +211,24 @@ export default function MusicBoxClient(){
    try{pc.close();}catch{}
    peersRef.current.delete(peerId);
   }
+  webrtcConnectedPeersRef.current.delete(peerId);
   const audioEl=remoteAudioElsRef.current.get(peerId);
   if(audioEl){
    audioEl.srcObject=null;
    audioEl.remove();
    remoteAudioElsRef.current.delete(peerId);
+  }
+ },[]);
+
+ // Helper: Flush queued ICE candidates once remoteDescription is set
+ const flushPendingCandidates=useCallback(async(peerId:string,pc:RTCPeerConnection)=>{
+  const queue=pendingCandidatesRef.current.get(peerId);
+  if(!queue||queue.length===0)return;
+  pendingCandidatesRef.current.delete(peerId);
+  for(const cand of queue){
+   try{
+    await pc.addIceCandidate(new RTCIceCandidate(cand));
+   }catch{}
   }
  },[]);
 
@@ -198,16 +246,20 @@ export default function MusicBoxClient(){
    for(const track of localStreamRef.current.getTracks()){
     pc.addTrack(track,localStreamRef.current);
    }
+  }else{
+   try{
+    pc.addTransceiver('audio',{direction:'sendrecv'});
+   }catch{}
   }
 
   pc.onicecandidate=(ev)=>{
    if(ev.candidate&&socketRef.current){
-    socketRef.current.emit('webrtc:ice-candidate',{toId:peerId,candidate:ev.candidate});
+    socketRef.current.emit('webrtc:ice-candidate',{toId:peerId,candidate:ev.candidate.toJSON()});
    }
   };
 
   pc.ontrack=(ev)=>{
-   const [remoteStream]=ev.streams;
+   const remoteStream=ev.streams?.[0]||(ev.track?new MediaStream([ev.track]):null);
    if(!remoteStream)return;
    let audioEl=remoteAudioElsRef.current.get(peerId);
    if(!audioEl){
@@ -219,12 +271,20 @@ export default function MusicBoxClient(){
     remoteAudioElsRef.current.set(peerId,audioEl);
    }
    audioEl.srcObject=remoteStream;
-   audioEl.volume=Math.max(0,Math.min(1,voiceVolume/100));
-   void audioEl.play().catch(()=>{});
+   audioEl.volume=Math.max(0,Math.min(1,voiceVolumeRef.current/100));
+   void audioEl.play().then(()=>{
+    webrtcConnectedPeersRef.current.add(peerId);
+   }).catch(()=>{
+    webrtcConnectedPeersRef.current.delete(peerId);
+   });
   };
 
   pc.onconnectionstatechange=()=>{
-   if(pc&&['failed','closed','disconnected'].includes(pc.connectionState)){
+   if(!pc)return;
+   if(pc.connectionState==='connected'){
+    webrtcConnectedPeersRef.current.add(peerId);
+   }else if(['failed','closed','disconnected'].includes(pc.connectionState)){
+    webrtcConnectedPeersRef.current.delete(peerId);
     if(pc.connectionState==='failed'||pc.connectionState==='closed'){
      closePeer(peerId);
     }
@@ -232,7 +292,7 @@ export default function MusicBoxClient(){
   };
 
   if(initiator){
-   void pc.createOffer()
+   void pc.createOffer({offerToReceiveAudio:true})
     .then(offer=>pc!.setLocalDescription(offer).then(()=>offer))
     .then(offer=>{
      socket.emit('webrtc:offer',{toId:peerId,sdp:offer});
@@ -241,10 +301,11 @@ export default function MusicBoxClient(){
   }
 
   return pc;
- },[closePeer,voiceVolume]);
+ },[closePeer]);
 
  // Update volume on all active remote voice elements when voiceVolume changes
  useEffect(()=>{
+  voiceVolumeRef.current=voiceVolume;
   const vol=Math.max(0,Math.min(1,voiceVolume/100));
   for(const el of remoteAudioElsRef.current.values()){
    el.volume=vol;
@@ -350,6 +411,9 @@ export default function MusicBoxClient(){
 
   socket.on('room:state',(state:RoomState)=>{
    setRoomState(state);
+   if(Array.isArray(state.messages)){
+    setChatMessages(state.messages);
+   }
    const pb=state.playback;
    if(!pb)return;
    if(pb.title)setVideoTitle(pb.title);
@@ -396,6 +460,18 @@ export default function MusicBoxClient(){
    setTimeout(()=>setVoiceNotice(null),4000);
   });
 
+  socket.on('chat:message',(msg:ChatMessage)=>{
+   if(!msg?.id)return;
+   setChatMessages(prev=>{
+    if(prev.some(m=>m.id===msg.id))return prev;
+    const next=[...prev,msg];
+    return next.length>60?next.slice(next.length-60):next;
+   });
+   if(!chatOpenRef.current){
+    setUnreadChatCount(c=>c+1);
+   }
+  });
+
   // WebRTC Signaling handlers
   socket.on('webrtc:peer-ready',({fromId}:{fromId:string})=>{
    if(!fromId||fromId===socket.id)return;
@@ -405,11 +481,13 @@ export default function MusicBoxClient(){
 
   socket.on('webrtc:offer',async({fromId,sdp}:{fromId:string;sdp:RTCSessionDescriptionInit})=>{
    if(!fromId||!sdp)return;
-   let pc=peersRef.current.get(fromId);
-   if(!pc)pc=getOrCreatePeer(fromId,false)??undefined;
+   // Always recreate a fresh responder peer so local mic tracks are attached and no glare state blocks setRemoteDescription
+   closePeer(fromId);
+   const pc=getOrCreatePeer(fromId,false);
    if(!pc)return;
    try{
     await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+    await flushPendingCandidates(fromId,pc);
     const answer=await pc.createAnswer();
     await pc.setLocalDescription(answer);
     socket.emit('webrtc:answer',{toId:fromId,sdp:answer});
@@ -418,22 +496,66 @@ export default function MusicBoxClient(){
 
   socket.on('webrtc:answer',async({fromId,sdp}:{fromId:string;sdp:RTCSessionDescriptionInit})=>{
    const pc=peersRef.current.get(fromId);
-   if(!pc||!sdp)return;
+   if(!pc||!sdp||pc.signalingState!=='have-local-offer')return;
    try{
     await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+    await flushPendingCandidates(fromId,pc);
    }catch{}
   });
 
   socket.on('webrtc:ice-candidate',async({fromId,candidate}:{fromId:string;candidate:RTCIceCandidateInit})=>{
+   if(!fromId||!candidate)return;
    const pc=peersRef.current.get(fromId);
-   if(!pc||!candidate)return;
+   if(!pc||!pc.remoteDescription){
+    const list=pendingCandidatesRef.current.get(fromId)||[];
+    list.push(candidate);
+    pendingCandidatesRef.current.set(fromId,list);
+    return;
+   }
    try{
     await pc.addIceCandidate(new RTCIceCandidate(candidate));
    }catch{}
   });
 
+  // Real-time PCM Voice Stream Receiver over Socket.IO (100% reliable across 4G/5G & NAT firewalls)
+  socket.on('voice:data',({fromId,pcm,sampleRate}:{fromId:string;pcm:ArrayBuffer|Uint8Array;sampleRate?:number})=>{
+   if(!fromId||fromId===socket.id||!pcm)return;
+   // If WebRTC P2P audio element for this peer is already connected and actively playing, avoid double playback
+   const activeEl=remoteAudioElsRef.current.get(fromId);
+   if(webrtcConnectedPeersRef.current.has(fromId)&&activeEl&&!activeEl.paused&&activeEl.readyState>=2){
+    return;
+   }
+   const ctx=ensureVoicePlaybackCtx();
+   if(!ctx)return;
+   try{
+    const rawBytes=pcm instanceof ArrayBuffer?new Int16Array(pcm):new Int16Array(pcm.buffer,pcm.byteOffset,Math.floor(pcm.byteLength/2));
+    if(rawBytes.length===0)return;
+    const rate=sampleRate||16000;
+    const audioBuf=ctx.createBuffer(1,rawBytes.length,rate);
+    const channel=audioBuf.getChannelData(0);
+    const vol=Math.max(0,Math.min(1.5,voiceVolumeRef.current/100));
+    for(let i=0;i<rawBytes.length;i++){
+     channel[i]=(rawBytes[i]/32768)*vol;
+    }
+    const src=ctx.createBufferSource();
+    src.buffer=audioBuf;
+    src.connect(ctx.destination);
+    const now=ctx.currentTime;
+    let nextTime=voiceNextPlayTimeRef.current.get(fromId)||0;
+    if(nextTime<now||nextTime>now+0.35){
+     nextTime=now+0.02;
+    }
+    src.start(nextTime);
+    voiceNextPlayTimeRef.current.set(fromId,nextTime+audioBuf.duration);
+   }catch{}
+  });
+
   socket.on('webrtc:peer-left',({peerId}:{peerId:string})=>{
-   if(peerId)closePeer(peerId);
+   if(peerId){
+    closePeer(peerId);
+    pendingCandidatesRef.current.delete(peerId);
+    voiceNextPlayTimeRef.current.delete(peerId);
+   }
   });
 
   socket.on('disconnect',()=>{
@@ -472,6 +594,7 @@ export default function MusicBoxClient(){
    setLobbyError('Vui lòng nhập Mã khóa Admin (Admin Key) để đăng nhập quyền Admin!');
    return;
   }
+  ensureVoicePlaybackCtx();
   setLobbyError(null);
   setRoomInput(cleanDigits);
   setRoomId(cleanDigits);
@@ -488,7 +611,7 @@ export default function MusicBoxClient(){
   }
   setActiveAdminKey(adminKeyInput.trim());
   setConnectTrigger(c=>c+1);
- },[roomInput,userName,loginMode,adminKeyInput,avatarId]);
+ },[roomInput,userName,loginMode,adminKeyInput,avatarId,ensureVoicePlaybackCtx]);
 
  // Generate random 4-digit Room ID
  const handleRandomRoomDigits=useCallback(()=>{
@@ -585,7 +708,8 @@ export default function MusicBoxClient(){
    setVoiceNotice('🎤 Đang phát giọng hát trực tiếp trong phòng!');
    setTimeout(()=>setVoiceNotice(null),3000);
 
-   // Setup Web Audio API Analyser + optional Karaoke Echo Monitor
+   // Setup Web Audio API Analyser + Karaoke Echo Monitor + Socket.IO PCM Voice Relay
+   ensureVoicePlaybackCtx();
    const AudioCtx=window.AudioContext||(window as unknown as {webkitAudioContext:typeof AudioContext}).webkitAudioContext;
    if(AudioCtx){
     const ctx=new AudioCtx();
@@ -594,6 +718,37 @@ export default function MusicBoxClient(){
     const analyser=ctx.createAnalyser();
     analyser.fftSize=256;
     source.connect(analyser);
+
+    // Real-time 16kHz Int16 PCM capture for Socket.IO Voice Relay (guarantees cross-network & mobile 4G/5G audio)
+    try{
+     const targetRate=16000;
+     const processor=ctx.createScriptProcessor(2048,1,1);
+     const silentGain=ctx.createGain();
+     silentGain.gain.value=0;
+     source.connect(processor);
+     processor.connect(silentGain);
+     silentGain.connect(ctx.destination);
+     voiceProcessorRef.current=processor;
+
+     processor.onaudioprocess=(ev)=>{
+      if(!socketRef.current?.connected)return;
+      const input=ev.inputBuffer.getChannelData(0);
+      const ratio=ctx.sampleRate/targetRate;
+      const outLen=Math.max(1,Math.floor(input.length/ratio));
+      const pcm16=new Int16Array(outLen);
+      let peak=0;
+      for(let i=0;i<outLen;i++){
+       const idx=Math.min(input.length-1,Math.floor(i*ratio));
+       const s=Math.max(-1,Math.min(1,input[idx]));
+       const abs=Math.abs(s);
+       if(abs>peak)peak=abs;
+       pcm16[i]=s<0?s*0x8000:s*0x7fff;
+      }
+      if(peak>0.004){
+       socketRef.current.volatile.emit('voice:data',{pcm:pcm16.buffer,sampleRate:targetRate});
+      }
+     };
+    }catch{}
 
     // Subtle karaoke echo monitor (only active when user enables `echoMonitor`)
     const monitorGain=ctx.createGain();
@@ -631,21 +786,28 @@ export default function MusicBoxClient(){
     },180);
    }
 
-   // Attach track to all existing peer connections & announce readiness so everyone hears us
-   for(const [peerId,pc] of peersRef.current.entries()){
+   // Send fresh WebRTC offers with our live mic track to all members in the room (without emitting webrtc:ready which causes glare)
+   const targetPeerIds=new Set<string>(Array.from(peersRef.current.keys()));
+   if(roomState?.members){
+    for(const m of roomState.members){
+     if(m.id&&m.id!==mySocketId&&m.id!=='local'){
+      targetPeerIds.add(m.id);
+     }
+    }
+   }
+   for(const peerId of targetPeerIds){
     closePeer(peerId);
     getOrCreatePeer(peerId,true);
    }
    if(socketRef.current?.connected){
     socketRef.current.emit('audio:state',{isMuted:false,audioLevel:15});
-    socketRef.current.emit('webrtc:ready');
    }
   }catch(err:unknown){
    setVoiceNotice('Không thể mở Mic. Hãy cấp quyền Microphone trên trình duyệt!');
    setTimeout(()=>setVoiceNotice(null),4000);
    console.error('Mic error:',err);
   }
- },[micEnabled,stopMicrophone,roomState?.members,mySocketId,echoMonitor,closePeer,getOrCreatePeer]);
+ },[micEnabled,stopMicrophone,roomState?.members,mySocketId,echoMonitor,closePeer,getOrCreatePeer,ensureVoicePlaybackCtx]);
 
  // Cleanup mic on unmount
  useEffect(()=>()=>{stopMicrophone();},[stopMicrophone]);
@@ -848,10 +1010,49 @@ export default function MusicBoxClient(){
 
  useEffect(()=>{
   preloadGameAssets();
+  if(typeof window!=='undefined'&&window.innerWidth<=768){
+   setChatOpen(false);
+  }
   const m=window.matchMedia('(pointer: coarse)');
   const change=()=>{setShowJoystick(m.matches);};
   change();m.addEventListener('change',change);return ()=>m.removeEventListener('change',change);
  },[]);
+
+ // Auto-scroll chat list to bottom when new messages arrive or chat opens
+ useEffect(()=>{
+  if(chatOpen&&chatListRef.current){
+   chatListRef.current.scrollTop=chatListRef.current.scrollHeight;
+  }
+ },[chatMessages,chatOpen]);
+
+ const handleToggleChat=useCallback(()=>{
+  setChatOpen(prev=>{
+   const next=!prev;
+   if(next)setUnreadChatCount(0);
+   return next;
+  });
+ },[]);
+
+ const handleSendChat=useCallback(()=>{
+  const cleaned=chatInput.trim().slice(0,300);
+  if(!cleaned)return;
+  setChatInput('');
+  if(socketRef.current&&socketConnected){
+   socketRef.current.emit('chat:send',{text:cleaned});
+  }else{
+   const localMsg:ChatMessage={
+    id:`local-${Date.now()}`,
+    senderId:mySocketId||'local',
+    senderName:userName||'Khách',
+    role:isSuperAdmin?'admin':isHost?'host':'listener',
+    isSuperAdmin,
+    isHost,
+    text:cleaned,
+    createdAt:Date.now(),
+   };
+   setChatMessages(prev=>[...prev.slice(-59),localMsg]);
+  }
+ },[chatInput,socketConnected,mySocketId,userName,isSuperAdmin,isHost]);
 
  useEffect(()=>{
   const down=(e:KeyboardEvent)=>{
@@ -1104,6 +1305,28 @@ export default function MusicBoxClient(){
      <span>👥</span> <strong>{memberCount}</strong>
     </div>
     <button
+     className={`icon-btn ${chatOpen?'active-icon-btn':''}`}
+     onClick={handleToggleChat}
+     aria-label="Bật/tắt khung chat bên trái"
+     title="Bật/tắt Khung Chat Phòng (Bên trái)"
+     style={{position:'relative'}}
+    >
+     💬
+     {!chatOpen&&unreadChatCount>0&&(
+      <span className="chat-unread-dot">{unreadChatCount>9?'9+':unreadChatCount}</span>
+     )}
+    </button>
+    <button
+     className="share-room-pill camera-top-pill hide-on-xs"
+     onClick={toggleCamera}
+     title="Đổi nhanh Góc nhìn: Thứ 3 / Thứ nhất (Nhập vai) / Toàn cảnh"
+    >
+     <span>{cameraMode==='first-person'?'👁️':cameraMode==='overview'?'◎':'🎥'}</span>
+     <strong className="hide-on-mobile">
+      {cameraMode==='first-person'?'Góc nhìn 1':cameraMode==='overview'?'Toàn cảnh':'Góc nhìn 3'}
+     </strong>
+    </button>
+    <button
      className={`icon-btn ${audioPanelOpen?'active-icon-btn':''}`}
      onClick={()=>setAudioPanelOpen(s=>!s)}
      aria-label="Bảng điều khiển âm thanh và TV"
@@ -1114,28 +1337,100 @@ export default function MusicBoxClient(){
     <button className="icon-btn hide-on-xs" onClick={()=>command('dance')} aria-label="Cảm xúc / Nhảy múa" title="Nhảy múa">😊</button>
     <button
      className={`icon-btn ${panelOpen?'active-icon-btn':''}`}
-     onClick={()=>setPanelOpen(s=>!s)}
-     aria-label="Cài đặt nhân vật"
-     title="Bật/tắt Bảng nhân vật"
+     onClick={()=>{
+      setPanelOpen(s=>{
+       const next=!s;
+       if(next){
+        setTimeout(()=>{rightPanelStackRef.current?.scrollTo({top:0,behavior:'smooth'});},40);
+       }
+       return next;
+      });
+     }}
+     aria-label="Cài đặt nhân vật & góc nhìn camera"
+     title="Bật/tắt Bảng nhân vật & Chọn góc nhìn Camera"
     >
      ⚙️
     </button>
    </div>
   </header>
 
+  {/* Left-Side Pop-up Room Chat Box (Toggleable On/Off) */}
+  <div className="left-chat-dock">
+   {!chatOpen?(
+    <button
+     type="button"
+     className="chat-popup-trigger-btn"
+     onClick={handleToggleChat}
+     title="Mở khung trò chuyện phòng"
+    >
+     <span>💬</span>
+     <strong>Chat Phòng</strong>
+     {unreadChatCount>0&&(
+      <span className="chat-unread-badge">{unreadChatCount>9?'9+':unreadChatCount}</span>
+     )}
+    </button>
+   ):(
+    <aside className="game-panel left-chat-panel" aria-label="Khung trò chuyện phòng">
+     <div className="panel-head">
+      <strong>💬 TRÒ CHUYỆN PHÒNG #{roomId}</strong>
+      <button className="close-panel-btn" onClick={handleToggleChat} title="Thu gọn khung chat">✕</button>
+     </div>
+     <div ref={chatListRef} className="chat-messages-list">
+      {chatMessages.length===0?(
+       <div className="empty-chat-note">
+        Chưa có tin nhắn nào. Hãy gửi lời chào tới mọi người trong phòng nhé! 👋
+       </div>
+      ):(
+       chatMessages.map(msg=>{
+        const isMe=msg.senderId===mySocketId||msg.senderId==='local';
+        const badge=msg.isSuperAdmin?'👑':msg.isHost||msg.role==='host'?'🏠':'';
+        const timeStr=new Date(msg.createdAt).toLocaleTimeString('vi-VN',{hour:'2-digit',minute:'2-digit'});
+        return (
+         <div key={msg.id} className={`chat-msg-item ${isMe?'chat-msg-me':''}`}>
+          <div className="chat-msg-header">
+           <strong className={`chat-sender-name ${msg.isSuperAdmin?'sender-admin':isMe?'sender-me':''}`}>
+            {badge?`${badge} `:''}{msg.senderName}{isMe?' (Bạn)':''}
+           </strong>
+           <span className="chat-msg-time">{timeStr}</span>
+          </div>
+          <div className="chat-msg-text">{msg.text}</div>
+         </div>
+        );
+       })
+      )}
+     </div>
+     <div className="chat-input-row">
+      <input
+       type="text"
+       className="yt-url-input chat-text-input"
+       placeholder="Nhập tin nhắn..."
+       maxLength={300}
+       value={chatInput}
+       onChange={e=>setChatInput(e.target.value)}
+       onKeyDown={e=>{
+        if(e.key==='Enter'){
+         e.preventDefault();
+         handleSendChat();
+        }
+       }}
+      />
+      <button type="button" className="chat-send-btn" onClick={handleSendChat}>
+       Gửi
+      </button>
+     </div>
+    </aside>
+   )}
+  </div>
+
   {/* Right-Side Stacked Control Panels: Character Panel on top, Audio & Online Singing Panel directly underneath */}
-  <div className="right-panel-stack">
+  <div ref={rightPanelStackRef} className="right-panel-stack">
    {panelOpen&&(
     <aside className="game-panel compact-panel" aria-label="Cài đặt nhân vật">
      <div className="panel-head">
-      <strong>NHÂN VẬT &amp; ĐIỀU KHIỂN</strong>
+      <strong>NHÂN VẬT &amp; GÓC NHÌN CAMERA</strong>
       <button className="close-panel-btn" onClick={()=>setPanelOpen(false)} title="Thu gọn">✕</button>
      </div>
-     <label htmlFor="select-avatar">Chọn nhân vật chibi</label>
-     <select id="select-avatar" value={avatarId} onChange={e=>handleChangeAvatar(e.target.value)}>
-      {CHARACTERS.map(a=><option key={a.id} value={a.id}>{a.name} · {a.id}</option>)}
-     </select>
-     <label htmlFor="select-camera-mode" style={{marginTop:5}}>Chọn góc nhìn camera</label>
+     <label htmlFor="select-camera-mode">Chọn góc nhìn camera</label>
      <select
       id="select-camera-mode"
       value={cameraMode}
@@ -1144,6 +1439,33 @@ export default function MusicBoxClient(){
       <option value="follow">🎥 Góc nhìn thứ 3 (Theo nhân vật)</option>
       <option value="first-person">👁️ Góc nhìn thứ nhất (Nhập vai)</option>
       <option value="overview">◎ Góc nhìn toàn cảnh phòng</option>
+     </select>
+     <div className="panel-buttons" style={{marginBottom:5}}>
+      <button
+       type="button"
+       style={cameraMode==='follow'?{background:'#f0d9ed',borderColor:'#c978df',color:'#6b2d66'}:undefined}
+       onClick={()=>handleSelectCameraMode('follow')}
+      >
+       🎥 Góc nhìn 3
+      </button>
+      <button
+       type="button"
+       style={cameraMode==='first-person'?{background:'#f0d9ed',borderColor:'#c978df',color:'#6b2d66'}:undefined}
+       onClick={()=>handleSelectCameraMode('first-person')}
+      >
+       👁️ Góc nhìn 1
+      </button>
+      <button
+       type="button"
+       style={cameraMode==='overview'?{background:'#f0d9ed',borderColor:'#c978df',color:'#6b2d66'}:undefined}
+       onClick={()=>handleSelectCameraMode('overview')}
+      >
+       ◎ Toàn cảnh
+      </button>
+     </div>
+     <label htmlFor="select-avatar">Chọn nhân vật chibi</label>
+     <select id="select-avatar" value={avatarId} onChange={e=>handleChangeAvatar(e.target.value)}>
+      {CHARACTERS.map(a=><option key={a.id} value={a.id}>{a.name} · {a.id}</option>)}
      </select>
      <div className="panel-buttons">
       <button onClick={toggleCamera} title="Đổi nhanh giữa Góc nhìn thứ 3 / Thứ nhất / Toàn cảnh">

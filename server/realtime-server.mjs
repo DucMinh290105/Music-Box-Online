@@ -67,6 +67,7 @@ export function getOrCreateRoom(rawRoomId) {
         { id: 'q-3', videoId: 'FlsCjmMhFmw', title: 'Alan Walker - Fade [NCS Release]', addedBy: 'Music Box', addedAt: Date.now() },
       ],
       history: [],
+      messages: [],
     });
   }
   return rooms.get(roomId);
@@ -84,6 +85,7 @@ function serializeRoomState(roomState) {
     playback: { ...roomState.playback },
     queue: [...roomState.queue],
     history: [...roomState.history],
+    messages: [...(roomState.messages || [])],
     serverTime: Date.now(),
   };
 }
@@ -352,7 +354,33 @@ export function attachRealtimeServer(httpServer) {
       broadcastState(roomState);
     });
 
-    // 4. Member Profile & 3D Avatar Position Sync
+    // 4. Member Profile, Room Chat & 3D Avatar Position Sync
+    socket.on('chat:send', ({ text }) => {
+      const member = roomState.members.get(socket.id);
+      if (!member || typeof text !== 'string') return;
+      const cleaned = text.trim().slice(0, 300);
+      if (!cleaned) return;
+
+      const msg = {
+        id: `msg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        senderId: socket.id,
+        senderName: member.name,
+        role: member.role,
+        isSuperAdmin: !!member.isSuperAdmin,
+        isHost: !!member.isHost,
+        text: cleaned,
+        createdAt: Date.now(),
+      };
+
+      if (!roomState.messages) roomState.messages = [];
+      roomState.messages.push(msg);
+      if (roomState.messages.length > 60) {
+        roomState.messages.shift();
+      }
+
+      io.to(roomState.roomId).emit('chat:message', msg);
+    });
+
     socket.on('member:update', (patch) => {
       const member = roomState.members.get(socket.id);
       if (!member || !patch) return;
@@ -688,6 +716,18 @@ export function attachRealtimeServer(httpServer) {
     socket.on('webrtc:ice-candidate', ({ toId, candidate }) => {
       if (!toId || !candidate) return;
       io.to(toId).emit('webrtc:ice-candidate', { fromId: socket.id, candidate });
+    });
+
+    // Real-time PCM Voice Relay over Socket.IO (100% cross-network & mobile 4G/5G fallback when P2P UDP is blocked)
+    socket.on('voice:data', (payload) => {
+      const member = roomState.members.get(socket.id);
+      if (!member || (roomState.roomMuted && !member.isSuperAdmin)) return;
+      if (!payload?.pcm) return;
+      socket.volatile.to(roomState.roomId).emit('voice:data', {
+        fromId: socket.id,
+        pcm: payload.pcm,
+        sampleRate: payload.sampleRate || 16000,
+      });
     });
 
     // Disconnection handler

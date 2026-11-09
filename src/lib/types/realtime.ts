@@ -39,6 +39,17 @@ export interface QueueItem {
   addedAt: number;
 }
 
+export interface ChatMessage {
+  id: string;
+  senderId: string;
+  senderName: string;
+  role?: UserRole;
+  isSuperAdmin?: boolean;
+  isHost?: boolean;
+  text: string;
+  createdAt: number;
+}
+
 export interface RoomState {
   roomId: string;
   adminId: string;
@@ -50,5 +61,6 @@ export interface RoomState {
   playback: PlaybackState;
   queue: QueueItem[];
   history: QueueItem[];
+  messages?: ChatMessage[];
   serverTime: number;
 }
