@@ -4,6 +4,7 @@ import { Server } from 'socket.io';
 
 const PORT = process.env.PORT || 3101;
 const MAX_MEMBERS = 20;
+const MAX_ACTIVE_ROOMS = 10;
 const MAX_MICS = 3;
 // Secret key for Admin login (can be customized via ADMIN_SECRET_KEY env var on Render)
 const ADMIN_SECRET_KEY = (process.env.ADMIN_SECRET_KEY || '290105').trim();
@@ -37,8 +38,16 @@ function sanitizeRoomId(raw) {
   return '1234';
 }
 
-// Multi-room in-memory store (any 4-digit room can be opened anytime by 1+ Guest or Admin)
+// Multi-room in-memory store (up to MAX_ACTIVE_ROOMS=10 concurrent 4-digit rooms)
 export const rooms = new Map();
+
+export function getActiveRoomCount() {
+  let count = 0;
+  for (const r of rooms.values()) {
+    if (r.members && r.members.size > 0) count += 1;
+  }
+  return count;
+}
 
 export function getOrCreateRoom(rawRoomId) {
   const roomId = sanitizeRoomId(rawRoomId);
@@ -177,23 +186,39 @@ export function attachRealtimeServer(httpServer) {
     }
 
     const isSuperAdmin = wantsAdmin && providedAdminKey === ADMIN_SECRET_KEY;
-    let roomState = getOrCreateRoom(requestedRoom);
+    const requestedSanitizedId = sanitizeRoomId(requestedRoom);
+    const existingRoom = rooms.get(requestedSanitizedId);
+    const isOpeningNewActiveRoom = !existingRoom || existingRoom.members.size === 0;
 
-    if (roomState.members.size >= MAX_MEMBERS && !isSuperAdmin) {
+    if (isOpeningNewActiveRoom && getActiveRoomCount() >= MAX_ACTIVE_ROOMS) {
+      socket.emit('room:error', {
+        code: 'MAX_ROOMS_REACHED',
+        message: `Hệ thống đang đạt giới hạn tối đa ${MAX_ACTIVE_ROOMS} phòng hoạt động đồng thời. Vui lòng nhập ID phòng đang mở hoặc thử lại sau!`,
+      });
+      socket.disconnect(true);
+      return;
+    }
+
+    const initialRoom = getOrCreateRoom(requestedSanitizedId);
+
+    if (initialRoom.members.size >= MAX_MEMBERS && !isSuperAdmin) {
       socket.emit('room:error', { code: 'ROOM_FULL', message: 'Phòng đã đạt giới hạn tối đa 20 thành viên.' });
       socket.disconnect(true);
       return;
     }
 
-    socket.join(roomState.roomId);
+    socket.data.roomId = initialRoom.roomId;
+    socket.join(initialRoom.roomId);
+
+    const getRoom = () => rooms.get(socket.data.roomId);
 
     const queryName = socket.handshake.query.name || (isSuperAdmin ? 'Admin' : `Khách ${socket.id.substring(0, 4)}`);
     const queryAvatar = socket.handshake.query.avatarId || 'chibi-01';
-    const isFirstMember = roomState.members.size === 0;
+    const isFirstMember = initialRoom.members.size === 0;
 
     // Slight offset around spawn so multiple players don't stack on the exact same spot
-    const angle = (roomState.members.size * 1.3) % (Math.PI * 2);
-    const radius = isFirstMember ? 0 : 0.75 + (roomState.members.size % 3) * 0.45;
+    const angle = (initialRoom.members.size * 1.3) % (Math.PI * 2);
+    const radius = isFirstMember ? 0 : 0.75 + (initialRoom.members.size % 3) * 0.45;
     const spawnX = Number((Math.cos(angle) * radius).toFixed(2));
     const spawnZ = Number((1.6 + Math.sin(angle) * radius * 0.6).toFixed(2));
 
@@ -205,7 +230,7 @@ export function attachRealtimeServer(httpServer) {
       isHost: isSuperAdmin || isFirstMember,
       isMuted: true,
       audioLevel: 0,
-      canPublishMic: isSuperAdmin || (isFirstMember && !roomState.roomMuted),
+      canPublishMic: isSuperAdmin || (isFirstMember && !initialRoom.roomMuted),
       joinedAt: Date.now(),
       avatarId: String(queryAvatar),
       x: spawnX,
@@ -216,32 +241,32 @@ export function attachRealtimeServer(httpServer) {
       seated: false,
     };
 
-    roomState.members.set(socket.id, newMember);
+    initialRoom.members.set(socket.id, newMember);
 
     // If Admin joins, Admin ALWAYS becomes Host immediately
     if (isSuperAdmin) {
-      roomState.adminId = socket.id;
-      roomState.hostId = socket.id;
-      if (!roomState.singerId) {
-        roomState.singerId = socket.id;
-        roomState.playback.currentSingerId = socket.id;
+      initialRoom.adminId = socket.id;
+      initialRoom.hostId = socket.id;
+      if (!initialRoom.singerId) {
+        initialRoom.singerId = socket.id;
+        initialRoom.playback.currentSingerId = socket.id;
       }
     } else if (isFirstMember) {
-      roomState.hostId = socket.id;
-      roomState.singerId = socket.id;
-      roomState.playback.currentSingerId = socket.id;
+      initialRoom.hostId = socket.id;
+      initialRoom.singerId = socket.id;
+      initialRoom.playback.currentSingerId = socket.id;
     }
 
-    recalculateRoles(roomState);
+    recalculateRoles(initialRoom);
     socket.emit('auth:success', {
-      roomId: roomState.roomId,
+      roomId: initialRoom.roomId,
       isSuperAdmin,
-      isHost: roomState.hostId === socket.id,
+      isHost: initialRoom.hostId === socket.id,
     });
-    socket.emit('room:state', serializeRoomState(roomState));
-    broadcastState(roomState);
+    socket.emit('room:state', serializeRoomState(initialRoom));
+    broadcastState(initialRoom);
 
-    console.log(`[Socket][Room:${roomState.roomId}] ${isSuperAdmin ? 'ADMIN' : 'Guest'} joined: ${newMember.name} (${socket.id}). Total: ${roomState.members.size}`);
+    console.log(`[Socket][Room:${initialRoom.roomId}] ${isSuperAdmin ? 'ADMIN' : 'Guest'} joined: ${newMember.name} (${socket.id}). Room members: ${initialRoom.members.size} | Active rooms: ${getActiveRoomCount()}/${MAX_ACTIVE_ROOMS}`);
 
     // 1. Clock Sync Ping-Pong
     socket.on('time:ping', (data) => {
@@ -253,6 +278,8 @@ export function attachRealtimeServer(httpServer) {
 
     // 2. Host/Admin Change 4-Digit Room ID (moves everyone in the room to the new 4-digit ID)
     socket.on('room:change_id', ({ newRoomId }) => {
+      const roomState = getRoom();
+      if (!roomState) return;
       const member = roomState.members.get(socket.id);
       if (!member) return;
       const isHostOrAdmin = socket.id === roomState.hostId || member.isSuperAdmin;
@@ -265,6 +292,7 @@ export function attachRealtimeServer(httpServer) {
       if (targetId === roomState.roomId) return;
 
       const oldRoomId = roomState.roomId;
+      let nextRoomState = roomState;
       // If target room already exists and has members, merge into it; otherwise rename this room
       const existingTarget = rooms.get(targetId);
       if (existingTarget && existingTarget.members.size > 0) {
@@ -275,11 +303,12 @@ export function attachRealtimeServer(httpServer) {
             if (s) {
               s.leave(oldRoomId);
               s.join(targetId);
+              s.data.roomId = targetId;
             }
           }
         }
         rooms.delete(oldRoomId);
-        roomState = existingTarget;
+        nextRoomState = existingTarget;
       } else {
         rooms.delete(oldRoomId);
         roomState.roomId = targetId;
@@ -289,17 +318,20 @@ export function attachRealtimeServer(httpServer) {
           if (s) {
             s.leave(oldRoomId);
             s.join(targetId);
+            s.data.roomId = targetId;
           }
         }
       }
 
-      recalculateRoles(roomState);
+      recalculateRoles(nextRoomState);
       io.to(targetId).emit('room:id_changed', { roomId: targetId, by: member.name });
-      broadcastState(roomState);
+      broadcastState(nextRoomState);
     });
 
     // 3. Admin Exclusive Controls: Kick Member & Mute Entire Room
     socket.on('admin:kick', ({ targetId }) => {
+      const roomState = getRoom();
+      if (!roomState) return;
       const caller = roomState.members.get(socket.id);
       if (!caller || !caller.isSuperAdmin) {
         socket.emit('room:error', { code: 'FORBIDDEN', message: 'Chỉ Admin (đăng nhập bằng Key) mới có quyền đuổi thành viên!' });
@@ -327,6 +359,8 @@ export function attachRealtimeServer(httpServer) {
     });
 
     socket.on('admin:mute_all', ({ muted }) => {
+      const roomState = getRoom();
+      if (!roomState) return;
       const caller = roomState.members.get(socket.id);
       if (!caller || !caller.isSuperAdmin) {
         socket.emit('room:error', { code: 'FORBIDDEN', message: 'Chỉ Admin (đăng nhập bằng Key) mới có quyền tắt tiếng cả phòng!' });
@@ -356,6 +390,8 @@ export function attachRealtimeServer(httpServer) {
 
     // 4. Member Profile, Room Chat & 3D Avatar Position Sync
     socket.on('chat:send', ({ text }) => {
+      const roomState = getRoom();
+      if (!roomState) return;
       const member = roomState.members.get(socket.id);
       if (!member || typeof text !== 'string') return;
       const cleaned = text.trim().slice(0, 300);
@@ -382,6 +418,8 @@ export function attachRealtimeServer(httpServer) {
     });
 
     socket.on('member:update', (patch) => {
+      const roomState = getRoom();
+      if (!roomState) return;
       const member = roomState.members.get(socket.id);
       if (!member || !patch) return;
       if (typeof patch.name === 'string' && patch.name.trim()) {
@@ -394,6 +432,8 @@ export function attachRealtimeServer(httpServer) {
     });
 
     socket.on('player:move', (pose) => {
+      const roomState = getRoom();
+      if (!roomState) return;
       const member = roomState.members.get(socket.id);
       if (!member || !pose) return;
       if (typeof pose.x === 'number') member.x = Number(pose.x.toFixed(3));
@@ -418,6 +458,8 @@ export function attachRealtimeServer(httpServer) {
 
     // 5. Playback Control
     socket.on('playback:control', async (action) => {
+      const roomState = getRoom();
+      if (!roomState) return;
       const member = roomState.members.get(socket.id);
       if (!member || !action) return;
 
@@ -548,6 +590,8 @@ export function attachRealtimeServer(httpServer) {
 
     // 6. Queue Management
     socket.on('queue:add', async (item) => {
+      const roomState = getRoom();
+      if (!roomState) return;
       const member = roomState.members.get(socket.id);
       if (!member || !item?.videoId) return;
 
@@ -563,13 +607,16 @@ export function attachRealtimeServer(httpServer) {
     });
 
     socket.on('queue:remove', ({ id }) => {
-      if (!id) return;
+      const roomState = getRoom();
+      if (!roomState || !id) return;
       roomState.queue = roomState.queue.filter((q) => q.id !== id);
       broadcastState(roomState);
     });
 
     // 7. Role & Mic Management
     socket.on('role:request_mic', () => {
+      const roomState = getRoom();
+      if (!roomState) return;
       const member = roomState.members.get(socket.id);
       if (!member) return;
       if (roomState.roomMuted && !member.isSuperAdmin) {
@@ -603,6 +650,8 @@ export function attachRealtimeServer(httpServer) {
     });
 
     socket.on('role:assign_singer', ({ targetId }) => {
+      const roomState = getRoom();
+      if (!roomState) return;
       const caller = roomState.members.get(socket.id);
       const isAuthorized = caller?.isSuperAdmin || socket.id === roomState.hostId;
       if (!isAuthorized) {
@@ -619,6 +668,8 @@ export function attachRealtimeServer(httpServer) {
     });
 
     socket.on('role:invite_singer', ({ targetId }) => {
+      const roomState = getRoom();
+      if (!roomState) return;
       const caller = roomState.members.get(socket.id);
       const isAuthorized = caller?.isSuperAdmin || socket.id === roomState.hostId || socket.id === roomState.singerId;
       if (!isAuthorized) {
@@ -645,6 +696,8 @@ export function attachRealtimeServer(httpServer) {
     });
 
     socket.on('role:revoke_mic', ({ targetId }) => {
+      const roomState = getRoom();
+      if (!roomState) return;
       const caller = roomState.members.get(socket.id);
       const target = roomState.members.get(targetId);
       if (target?.isSuperAdmin && socket.id !== targetId) {
@@ -682,6 +735,8 @@ export function attachRealtimeServer(httpServer) {
 
     // 8. Audio State & WebRTC Voice Signaling
     socket.on('audio:state', ({ isMuted, audioLevel }) => {
+      const roomState = getRoom();
+      if (!roomState) return;
       const member = roomState.members.get(socket.id);
       if (!member) return;
       if (roomState.roomMuted && !member.isSuperAdmin && !isMuted) {
@@ -700,6 +755,8 @@ export function attachRealtimeServer(httpServer) {
     });
 
     socket.on('webrtc:ready', () => {
+      const roomState = getRoom();
+      if (!roomState) return;
       socket.to(roomState.roomId).emit('webrtc:peer-ready', { fromId: socket.id });
     });
 
@@ -720,6 +777,8 @@ export function attachRealtimeServer(httpServer) {
 
     // Real-time PCM Voice Relay over Socket.IO (100% cross-network & mobile 4G/5G fallback when P2P UDP is blocked)
     socket.on('voice:data', (payload) => {
+      const roomState = getRoom();
+      if (!roomState) return;
       const member = roomState.members.get(socket.id);
       if (!member || (roomState.roomMuted && !member.isSuperAdmin)) return;
       if (!payload?.pcm) return;
@@ -732,11 +791,18 @@ export function attachRealtimeServer(httpServer) {
 
     // Disconnection handler
     socket.on('disconnect', () => {
+      const roomState = getRoom();
+      if (!roomState) return;
       console.log(`[Socket][Room:${roomState.roomId}] Member disconnected: ${socket.id}`);
       roomState.members.delete(socket.id);
       roomState.invitedSingerIds = roomState.invitedSingerIds.filter((id) => id !== socket.id);
 
       socket.to(roomState.roomId).emit('webrtc:peer-left', { peerId: socket.id });
+
+      if (roomState.members.size === 0) {
+        rooms.delete(roomState.roomId);
+        return;
+      }
 
       if (socket.id === roomState.hostId) {
         roomState.hostId = '';
@@ -768,16 +834,17 @@ if (isMain) {
     }
 
     if (req.url?.startsWith('/health') || req.url === '/') {
-      const defaultRoom = getOrCreateRoom('1234');
+      const defaultRoom = rooms.get('1234');
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         status: 'ok',
         service: 'music-box-realtime',
-        activeRooms: rooms.size,
-        roomId: defaultRoom.roomId,
-        members: defaultRoom.members.size,
+        activeRooms: getActiveRoomCount(),
+        maxRooms: MAX_ACTIVE_ROOMS,
+        roomId: '1234',
+        members: defaultRoom ? defaultRoom.members.size : 0,
         maxMembers: MAX_MEMBERS,
-        playback: defaultRoom.playback,
+        playback: defaultRoom ? defaultRoom.playback : null,
       }));
       return;
     }

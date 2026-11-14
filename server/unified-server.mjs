@@ -1,6 +1,6 @@
 import http from 'http';
 import next from 'next';
-import { attachRealtimeServer, getOrCreateRoom, rooms } from './realtime-server.mjs';
+import { attachRealtimeServer, getActiveRoomCount, rooms } from './realtime-server.mjs';
 
 const dev = process.env.NODE_ENV !== 'production';
 const hostname = '0.0.0.0';
@@ -13,14 +13,15 @@ await app.prepare();
 
 const server = http.createServer((req, res) => {
   if (req.url === '/health') {
-    const defaultRoom = getOrCreateRoom('1234');
+    const defaultRoom = rooms.get('1234');
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(
       JSON.stringify({
         status: 'ok',
         service: 'music-box-unified',
-        activeRooms: rooms.size,
-        members: defaultRoom.members.size,
+        activeRooms: getActiveRoomCount(),
+        maxRooms: 10,
+        members: defaultRoom ? defaultRoom.members.size : 0,
       })
     );
     return;

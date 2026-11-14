@@ -71,6 +71,8 @@ export default function MusicBoxClient(){
 
  // Entry Gate / Lobby Modal & Role State (Guest vs Admin Key + 4-Digit Room ID)
  const [hasEnteredRoom,setHasEnteredRoom]=useState(false);
+ const hasEnteredRoomRef=useRef(false);
+ hasEnteredRoomRef.current=hasEnteredRoom;
  const [loginMode,setLoginMode]=useState<'guest'|'admin'>('guest');
  const [adminKeyInput,setAdminKeyInput]=useState('');
  const [activeAdminKey,setActiveAdminKey]=useState('');
@@ -108,6 +110,8 @@ export default function MusicBoxClient(){
  const audioDelayRef=useRef(0);
  const lastLocalActionRef=useRef(0);
  const lastAppliedVersionRef=useRef(0);
+ const lastSyncedVideoIdRef=useRef('K4DyBUG242c');
+ const pendingSeekRef=useRef<{videoId:string;sec:number}|null>(null);
 
  const [videoId,setVideoId]=useState('K4DyBUG242c');
  const [videoTitle,setVideoTitle]=useState('Cartoon, Jéja - On & On [NCS]');
@@ -325,6 +329,9 @@ export default function MusicBoxClient(){
  // Connect to Realtime Server when user enters from Lobby (or changes roomId / role)
  useEffect(()=>{
   if(typeof window==='undefined'||connectTrigger===0)return;
+  lastAppliedVersionRef.current=0;
+  lastLocalActionRef.current=0;
+  pendingSeekRef.current=null;
   const savedName=localStorage.getItem('mb_user_name')||userName||'Khách';
   const savedAvatar=localStorage.getItem('mb_avatar_id')||avatarId;
   const realtimeUrl=resolveRealtimeUrl();
@@ -431,10 +438,28 @@ export default function MusicBoxClient(){
     const now=Date.now()+serverTimeOffsetRef.current;
     const elapsed=pb.playbackStatus==='playing'?Math.max(0,(now-pb.updatedAt)/1000):0;
     const targetSec=Math.max(0,pb.positionSeconds+elapsed+audioDelayRef.current/1000);
-    const cur=playerRef.current?.getCurrentTime?.()||0;
-    if(targetSec>1.5&&Math.abs(cur-targetSec)>2.5){
+    const videoChanged=pb.videoId!==lastSyncedVideoIdRef.current;
+    lastSyncedVideoIdRef.current=pb.videoId;
+
+    if(videoChanged){
      setCurrentTime(targetSec);
-     playerRef.current?.seekTo(targetSec);
+     pendingSeekRef.current={videoId:pb.videoId,sec:targetSec};
+     window.setTimeout(()=>{
+      const p=pendingSeekRef.current;
+      if(p&&p.videoId===pb.videoId){
+       const curTime=playerRef.current?.getCurrentTime?.()||0;
+       if(Math.abs(curTime-p.sec)>2.0){
+        playerRef.current?.seekTo(p.sec);
+       }
+       pendingSeekRef.current=null;
+      }
+     },550);
+    }else{
+     const cur=playerRef.current?.getCurrentTime?.()||0;
+     if(Math.abs(cur-targetSec)>2.5){
+      setCurrentTime(targetSec);
+      playerRef.current?.seekTo(targetSec);
+     }
     }
    }
   });
@@ -455,9 +480,16 @@ export default function MusicBoxClient(){
    });
   });
 
-  socket.on('room:error',({message:errMsg}:{message:string})=>{
+  socket.on('room:error',({code,message:errMsg}:{code?:string;message:string})=>{
+   if(!hasEnteredRoomRef.current||code==='MAX_ROOMS_REACHED'||code==='ROOM_FULL'){
+    setLobbyError(errMsg);
+    if(code==='MAX_ROOMS_REACHED'||code==='ROOM_FULL'){
+     setHasEnteredRoom(false);
+     setSocketConnected(false);
+    }
+   }
    setVoiceNotice(errMsg);
-   setTimeout(()=>setVoiceNotice(null),4000);
+   setTimeout(()=>setVoiceNotice(null),4500);
   });
 
   socket.on('chat:message',(msg:ChatMessage)=>{
@@ -595,11 +627,15 @@ export default function MusicBoxClient(){
    return;
   }
   ensureVoicePlaybackCtx();
+  lastAppliedVersionRef.current=0;
+  lastLocalActionRef.current=0;
+  pendingSeekRef.current=null;
   setLobbyError(null);
   setRoomInput(cleanDigits);
   setRoomId(cleanDigits);
   setUserName(cleanName);
   setRemoteMovedMap({});
+  setChatMessages([]);
   if(typeof window!=='undefined'){
    localStorage.setItem('mb_user_name',cleanName);
    localStorage.setItem('mb_avatar_id',avatarId);
@@ -648,8 +684,12 @@ export default function MusicBoxClient(){
    socketRef.current.emit('room:change_id',{newRoomId:cleanDigits});
    return;
   }
+  lastAppliedVersionRef.current=0;
+  lastLocalActionRef.current=0;
+  pendingSeekRef.current=null;
   setRoomId(cleanDigits);
   setRemoteMovedMap({});
+  setChatMessages([]);
   if(typeof window!=='undefined'){
    localStorage.setItem('mb_room_id',cleanDigits);
   }
@@ -1090,10 +1130,6 @@ export default function MusicBoxClient(){
   setMessage(`Đã chuyển sang: ${modeLabel}.`);
  },[]);
 
- const toggleCamera=()=>{
-  const nextMode:CameraMode=cameraMode==='follow'?'first-person':cameraMode==='first-person'?'overview':'follow';
-  handleSelectCameraMode(nextMode);
- };
  const doInteract=()=>command(status.seated?'stand':'interact');
  const busy=status.seatPhase!=='idle'&&status.seatPhase!=='sitting';
  const canInteract=status.seated||!!status.near;
@@ -1246,6 +1282,13 @@ export default function MusicBoxClient(){
        playbackStatus={isPlaying?'playing':'paused'}
        personalVolume={personalVolume}
        isMuted={isMuted}
+       onReady={()=>{
+        const p=pendingSeekRef.current;
+        if(p&&p.videoId===videoId){
+         if(p.sec>1.0)playerRef.current?.seekTo(p.sec);
+         pendingSeekRef.current=null;
+        }
+       }}
        onStateChange={(st)=>{
         if(st==='PLAYING')setIsPlaying(true);
         else if(st==='ENDED')handleNextSong();
@@ -1260,12 +1303,11 @@ export default function MusicBoxClient(){
    </div>
   </div>
 
-  {/* Clean Header Bar with 4-Digit Room ID Sharing, Role Badge & Quick Mic Toggle */}
+  {/* Clean Streamlined Header Bar (6 compact controls, fits all mobile & desktop screens) */}
   <header className="topbar">
-   <div className="brand" onClick={()=>setPanelOpen(s=>!s)} title="Bấm để đóng/mở bảng nhân vật">
+   <div className="brand" title="Music Box Online">
     <span className="brand-icon">♫</span>
     <strong className="brand-text-full">Music Box Online</strong>
-    <strong className="brand-text-mobile">Music Box</strong>
    </div>
    <div className="topbar-actions">
     <button
@@ -1275,7 +1317,7 @@ export default function MusicBoxClient(){
     >
      <span>{copyCopied?'✓':'🔑'}</span>
      <strong className="hide-on-mobile">{copyCopied?`Đã copy Link & ID ${roomId}!`:`ID Phòng: ${roomId}`}</strong>
-     <strong className="show-on-mobile">{copyCopied?'Đã copy':roomId}</strong>
+     <strong className="show-on-mobile">{copyCopied?'✓':roomId}</strong>
     </button>
     <button
      className="share-room-pill role-pill"
@@ -1283,8 +1325,7 @@ export default function MusicBoxClient(){
      title="Mở bảng chọn ID phòng 4 số hoặc đổi tư cách Guest / Admin"
     >
      <span>{isSuperAdmin?'👑':isHost?'🏠':'🚪'}</span>
-     <strong className="hide-on-mobile">{isSuperAdmin?'Admin':isHost?'Chủ phòng':'Đổi ID / Vai trò'}</strong>
-     <strong className="show-on-mobile">{isSuperAdmin?'Admin':isHost?'Chủ':''}</strong>
+     <strong className="hide-on-mobile">{isSuperAdmin?'Admin':isHost?'Chủ phòng':'Đổi ID'}</strong>
     </button>
     <button
      className={`mic-top-pill ${micEnabled?'mic-live':''}`}
@@ -1293,7 +1334,6 @@ export default function MusicBoxClient(){
     >
      <span>{micEnabled?'🔴':'🎤'}</span>
      <strong className="hide-on-mobile">{micEnabled?'Đang Hát':'Hát Online'}</strong>
-     <strong className="show-on-mobile">{micEnabled?'Hát':'Mic'}</strong>
     </button>
     <div
      className="user-count-pill"
@@ -1305,28 +1345,6 @@ export default function MusicBoxClient(){
      <span>👥</span> <strong>{memberCount}</strong>
     </div>
     <button
-     className={`icon-btn ${chatOpen?'active-icon-btn':''}`}
-     onClick={handleToggleChat}
-     aria-label="Bật/tắt khung chat bên trái"
-     title="Bật/tắt Khung Chat Phòng (Bên trái)"
-     style={{position:'relative'}}
-    >
-     💬
-     {!chatOpen&&unreadChatCount>0&&(
-      <span className="chat-unread-dot">{unreadChatCount>9?'9+':unreadChatCount}</span>
-     )}
-    </button>
-    <button
-     className="share-room-pill camera-top-pill hide-on-xs"
-     onClick={toggleCamera}
-     title="Đổi nhanh Góc nhìn: Thứ 3 / Thứ nhất (Nhập vai) / Toàn cảnh"
-    >
-     <span>{cameraMode==='first-person'?'👁️':cameraMode==='overview'?'◎':'🎥'}</span>
-     <strong className="hide-on-mobile">
-      {cameraMode==='first-person'?'Góc nhìn 1':cameraMode==='overview'?'Toàn cảnh':'Góc nhìn 3'}
-     </strong>
-    </button>
-    <button
      className={`icon-btn ${audioPanelOpen?'active-icon-btn':''}`}
      onClick={()=>setAudioPanelOpen(s=>!s)}
      aria-label="Bảng điều khiển âm thanh và TV"
@@ -1334,7 +1352,6 @@ export default function MusicBoxClient(){
     >
      🎵
     </button>
-    <button className="icon-btn hide-on-xs" onClick={()=>command('dance')} aria-label="Cảm xúc / Nhảy múa" title="Nhảy múa">😊</button>
     <button
      className={`icon-btn ${panelOpen?'active-icon-btn':''}`}
      onClick={()=>{
@@ -1347,7 +1364,7 @@ export default function MusicBoxClient(){
       });
      }}
      aria-label="Cài đặt nhân vật & góc nhìn camera"
-     title="Bật/tắt Bảng nhân vật & Chọn góc nhìn Camera"
+     title="Cài đặt: Góc nhìn Camera, Nhân vật & Điều khiển"
     >
      ⚙️
     </button>
@@ -1422,12 +1439,12 @@ export default function MusicBoxClient(){
    )}
   </div>
 
-  {/* Right-Side Stacked Control Panels: Character Panel on top, Audio & Online Singing Panel directly underneath */}
+  {/* Right-Side Stacked Control Panels: Character & Camera Settings on top, Audio & Online Singing Panel directly underneath */}
   <div ref={rightPanelStackRef} className="right-panel-stack">
    {panelOpen&&(
-    <aside className="game-panel compact-panel" aria-label="Cài đặt nhân vật">
+    <aside className="game-panel compact-panel" aria-label="Cài đặt nhân vật và góc nhìn">
      <div className="panel-head">
-      <strong>NHÂN VẬT &amp; GÓC NHÌN CAMERA</strong>
+      <strong>⚙️ CÀI ĐẶT &amp; GÓC NHÌN</strong>
       <button className="close-panel-btn" onClick={()=>setPanelOpen(false)} title="Thu gọn">✕</button>
      </div>
      <label htmlFor="select-camera-mode">Chọn góc nhìn camera</label>
@@ -1440,42 +1457,15 @@ export default function MusicBoxClient(){
       <option value="first-person">👁️ Góc nhìn thứ nhất (Nhập vai)</option>
       <option value="overview">◎ Góc nhìn toàn cảnh phòng</option>
      </select>
-     <div className="panel-buttons" style={{marginBottom:5}}>
-      <button
-       type="button"
-       style={cameraMode==='follow'?{background:'#f0d9ed',borderColor:'#c978df',color:'#6b2d66'}:undefined}
-       onClick={()=>handleSelectCameraMode('follow')}
-      >
-       🎥 Góc nhìn 3
-      </button>
-      <button
-       type="button"
-       style={cameraMode==='first-person'?{background:'#f0d9ed',borderColor:'#c978df',color:'#6b2d66'}:undefined}
-       onClick={()=>handleSelectCameraMode('first-person')}
-      >
-       👁️ Góc nhìn 1
-      </button>
-      <button
-       type="button"
-       style={cameraMode==='overview'?{background:'#f0d9ed',borderColor:'#c978df',color:'#6b2d66'}:undefined}
-       onClick={()=>handleSelectCameraMode('overview')}
-      >
-       ◎ Toàn cảnh
-      </button>
-     </div>
-     <label htmlFor="select-avatar">Chọn nhân vật chibi</label>
+     <label htmlFor="select-avatar" style={{marginTop:5}}>Chọn nhân vật chibi</label>
      <select id="select-avatar" value={avatarId} onChange={e=>handleChangeAvatar(e.target.value)}>
       {CHARACTERS.map(a=><option key={a.id} value={a.id}>{a.name} · {a.id}</option>)}
      </select>
      <div className="panel-buttons">
-      <button onClick={toggleCamera} title="Đổi nhanh giữa Góc nhìn thứ 3 / Thứ nhất / Toàn cảnh">
-       {cameraMode==='follow'?'👁️ Góc nhìn 1':cameraMode==='first-person'?'◎ Toàn cảnh':'🎥 Theo sau'}
-      </button>
-      <button onClick={()=>{command('camera-reset');setCameraMode('follow');}}>↺ Camera</button>
-      <button onClick={()=>command('wave')} disabled={busy||status.seated}>👋 Vẫy tay</button>
-      <button onClick={()=>command('dance')} disabled={busy||status.seated}>♫ Nhảy múa</button>
-      <button onClick={()=>{command('reset');setMessage('Đã về trung tâm phòng.');}}>⌂ Về giữa phòng</button>
-      <button onClick={()=>{setShowJoystick(s=>!s);control.current.joystick={x:0,y:0};setKnob({x:0,y:0});}}>{showJoystick?'⊙ Ẩn joystick':'⊙ Joystick'}</button>
+      <button type="button" onClick={()=>{command('camera-reset');setCameraMode('follow');}}>↺ Đặt lại camera</button>
+      <button type="button" onClick={()=>command('wave')} disabled={busy||status.seated}>👋 Vẫy tay</button>
+      <button type="button" onClick={()=>{command('reset');setMessage('Đã về trung tâm phòng.');}}>⌂ Về giữa phòng</button>
+      <button type="button" onClick={()=>{setShowJoystick(s=>!s);control.current.joystick={x:0,y:0};setKnob({x:0,y:0});}}>{showJoystick?'⊙ Ẩn joystick':'⊙ Hiện joystick'}</button>
      </div>
      <div className="panel-stats">
       <span>{status.avatarReady?actions[status.action]??status.action:'Đang nạp'}</span>
